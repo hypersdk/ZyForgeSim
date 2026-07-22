@@ -116,11 +116,7 @@ mod tests {
     struct TestScheduler;
 
     impl Scheduler for TestScheduler {
-        fn schedule(
-            &mut self,
-            cluster: &mut Cluster,
-            rm: &ResourceManager,
-        ) -> Vec<Placement> {
+        fn schedule(&mut self, cluster: &mut Cluster, rm: &ResourceManager) -> Vec<Placement> {
             cluster.sort_waiting_by_arrival();
             let mut placements = Vec::new();
             let waiting: Vec<_> = cluster.waiting_queue.iter().cloned().collect();

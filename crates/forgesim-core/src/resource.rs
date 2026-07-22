@@ -1,7 +1,7 @@
 use crate::cluster::Cluster;
 use crate::error::{SimError, SimResult};
-use crate::mig::MigProfileRegistry;
 use crate::mig::reconfigure_gpu;
+use crate::mig::MigProfileRegistry;
 use crate::models::{Job, Placement};
 
 #[derive(Debug)]
@@ -123,9 +123,7 @@ impl ResourceManager {
             available += gpu.free_mig_slice_count(profile);
             if gpu.is_fully_idle() {
                 if let Ok(spec) = registry.profile(profile) {
-                    if gpu.slices.is_empty()
-                        || gpu.active_mig_profile.as_deref() != Some(profile)
-                    {
+                    if gpu.slices.is_empty() || gpu.active_mig_profile.as_deref() != Some(profile) {
                         available += spec.max_per_gpu;
                     }
                 }
@@ -169,9 +167,7 @@ impl ResourceManager {
             let gpu_id = cluster
                 .all_gpus()
                 .find(|g| {
-                    g.mig_capable
-                        && g.is_fully_idle()
-                        && g.free_mig_slice_count(profile) < needed
+                    g.mig_capable && g.is_fully_idle() && g.free_mig_slice_count(profile) < needed
                 })
                 .map(|g| g.id.clone());
 

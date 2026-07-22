@@ -14,7 +14,7 @@ impl Scheduler for FifoScheduler {
         resource_manager: &ResourceManager,
     ) -> Vec<Placement> {
         cluster.sort_waiting_by_arrival();
-        let waiting: Vec<_> = cluster.waiting_queue.iter().cloned().collect();
+        let waiting: Vec<_> = cluster.waiting_queue.to_vec();
         let mut placements = Vec::new();
 
         for job in waiting {

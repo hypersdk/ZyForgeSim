@@ -249,19 +249,19 @@ pub fn compare_schedules(
     let mut matching = 0usize;
 
     for entry in oracle {
-        let simulated_entry = simulated.get(&entry.job_id).cloned().unwrap_or_else(|| {
-            SimulatedPlacement {
-                job_id: entry.job_id.clone(),
-                start_time: f64::NAN,
-                gpu_ids: Vec::new(),
-                nodes: Vec::new(),
-            }
-        });
+        let simulated_entry =
+            simulated
+                .get(&entry.job_id)
+                .cloned()
+                .unwrap_or_else(|| SimulatedPlacement {
+                    job_id: entry.job_id.clone(),
+                    start_time: f64::NAN,
+                    gpu_ids: Vec::new(),
+                    nodes: Vec::new(),
+                });
 
-        let placement_match =
-            placement_sets_match(&entry.gpu_ids, &simulated_entry.gpu_ids);
-        let schedule_time_match =
-            (entry.timestamp - simulated_entry.start_time).abs() < 1e-6;
+        let placement_match = placement_sets_match(&entry.gpu_ids, &simulated_entry.gpu_ids);
+        let schedule_time_match = (entry.timestamp - simulated_entry.start_time).abs() < 1e-6;
 
         if placement_match && schedule_time_match {
             matching += 1;
@@ -358,7 +358,8 @@ mod tests {
 
     #[test]
     fn parses_trace_events() {
-        let line = r#"{"timestamp":0,"event":"JobSubmitted","job":"j1","gpu_count":1,"runtime":10}"#;
+        let line =
+            r#"{"timestamp":0,"event":"JobSubmitted","job":"j1","gpu_count":1,"runtime":10}"#;
         let event = parse_trace_line(line).unwrap();
         assert!(matches!(
             event,
@@ -382,7 +383,12 @@ mod tests {
             timestamp: 18.0,
             job: "llama70b".into(),
             node: "node-4".into(),
-            gpus: vec![GpuRef::Index(0), GpuRef::Index(1), GpuRef::Index(2), GpuRef::Index(3)],
+            gpus: vec![
+                GpuRef::Index(0),
+                GpuRef::Index(1),
+                GpuRef::Index(2),
+                GpuRef::Index(3),
+            ],
         }];
         let oracle = oracle_placements_from_trace(&events, &cluster).unwrap();
         assert_eq!(oracle[0].gpu_ids.len(), 4);
