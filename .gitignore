@@ -17,6 +17,7 @@ build/
 *.so
 *.dylib
 .venv/
+.venv*/
 venv/
 .mypy_cache/
 .pytest_cache/

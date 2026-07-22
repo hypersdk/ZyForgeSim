@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use forgesim_config::{
-    load_cluster_from_config, load_forge_bundle, run_forge_bundle, run_simulation,
-    run_trace_file, trace_diff_to_json,
+    load_cluster_from_config, load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file,
+    trace_diff_to_json,
 };
 
 #[derive(Parser)]
@@ -69,14 +69,14 @@ enum Commands {
     },
 }
 
-fn print_metrics(
-    metrics: forgesim_metrics::SimulationMetrics,
-    output: Option<PathBuf>,
-) {
+fn print_metrics(metrics: forgesim_metrics::SimulationMetrics, output: Option<PathBuf>) {
     println!("ForgeSim results");
     println!("  makespan:          {:.2}", metrics.makespan);
     println!("  mean wait time:    {:.2}", metrics.mean_wait_time);
-    println!("  gpu utilization:   {:.2}%", metrics.gpu_utilization * 100.0);
+    println!(
+        "  gpu utilization:   {:.2}%",
+        metrics.gpu_utilization * 100.0
+    );
     println!(
         "  jobs completed:    {}/{}",
         metrics.jobs_completed, metrics.jobs_total
@@ -86,38 +86,25 @@ fn print_metrics(
     }
 
     let json = metrics.to_json_pretty();
-    if let Some(out) = output {
-        fs::write(&out, &json).unwrap_or_else(|e| {
-            eprintln!("failed to write output: {e}");
-            std::process::exit(1);
-        });
-        println!("  metrics written:   {}", out.display());
-    } else {
-        let default_out = PathBuf::from("outputs/metrics.json");
-        if fs::create_dir_all("outputs").is_ok() {
-            let _ = fs::write(&default_out, &json);
-            println!("  metrics written:   {}", default_out.display());
-        }
+    let out = output.unwrap_or_else(|| PathBuf::from("outputs/metrics.json"));
+    if let Some(parent) = out.parent() {
+        let _ = fs::create_dir_all(parent);
     }
+    fs::write(&out, &json).unwrap_or_else(|e| {
+        eprintln!("failed to write output: {e}");
+        std::process::exit(1);
+    });
+    println!("  metrics written:   {}", out.display());
 }
 
-fn print_trace_report(
-    report: forgesim_config::TraceDiffReport,
-    output: Option<PathBuf>,
-) {
+fn print_trace_report(report: forgesim_config::TraceDiffReport, output: Option<PathBuf>) {
     println!("ForgeSim trace replay ({})", report.scheduler);
-    println!(
-        "  oracle schedules:  {}",
-        report.oracle_schedules
-    );
+    println!("  oracle schedules:  {}", report.oracle_schedules);
     println!(
         "  matching:          {}/{}",
         report.matching_placements, report.oracle_schedules
     );
-    println!(
-        "  differing:         {}",
-        report.differing_placements
-    );
+    println!("  differing:         {}", report.differing_placements);
     println!(
         "  sim makespan:      {:.2}",
         report.simulation_metrics.makespan
@@ -138,19 +125,15 @@ fn print_trace_report(
     }
 
     let json = trace_diff_to_json(&report);
-    if let Some(out) = output {
-        fs::write(&out, &json).unwrap_or_else(|e| {
-            eprintln!("failed to write output: {e}");
-            std::process::exit(1);
-        });
-        println!("  report written:    {}", out.display());
-    } else {
-        let default_out = PathBuf::from("outputs/trace_diff.json");
-        if fs::create_dir_all("outputs").is_ok() {
-            let _ = fs::write(&default_out, &json);
-            println!("  report written:    {}", default_out.display());
-        }
+    let out = output.unwrap_or_else(|| PathBuf::from("outputs/trace_diff.json"));
+    if let Some(parent) = out.parent() {
+        let _ = fs::create_dir_all(parent);
     }
+    fs::write(&out, &json).unwrap_or_else(|e| {
+        eprintln!("failed to write output: {e}");
+        std::process::exit(1);
+    });
+    println!("  report written:    {}", out.display());
 }
 
 fn main() {

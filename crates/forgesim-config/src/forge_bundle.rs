@@ -174,9 +174,7 @@ fn gpu_count_from_spec(spec: &Value) -> u32 {
             .unwrap_or(1) as u32;
         nodes * gpn
     } else {
-        spec.get("gpus")
-            .and_then(|g| g.as_i64())
-            .unwrap_or(1) as u32
+        spec.get("gpus").and_then(|g| g.as_i64()).unwrap_or(1) as u32
     }
 }
 
@@ -216,10 +214,17 @@ pub fn parse_fabric_ai_job(
         return Err(ConfigError::Invalid("expected FabricAIJob".into()));
     }
 
-    let meta = doc.get("metadata").ok_or_else(|| ConfigError::Invalid("missing metadata".into()))?;
-    let spec = doc.get("spec").ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
+    let meta = doc
+        .get("metadata")
+        .ok_or_else(|| ConfigError::Invalid("missing metadata".into()))?;
+    let spec = doc
+        .get("spec")
+        .ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
 
-    let name = meta.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+    let name = meta
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("unknown");
     let namespace = meta
         .get("namespace")
         .and_then(|n| n.as_str())
@@ -228,12 +233,12 @@ pub fn parse_fabric_ai_job(
 
     let annotations = meta.get("annotations").and_then(|a| a.as_mapping());
     let gang_enabled = annotations
-        .and_then(|a| a.get(&Value::from("forge.ai/gang-schedule")))
+        .and_then(|a| a.get(Value::from("forge.ai/gang-schedule")))
         .and_then(|v| v.as_str())
         .map(|s| s == "true")
         .unwrap_or(false);
     let gang_size_nodes = annotations
-        .and_then(|a| a.get(&Value::from("forge.ai/gang-size")))
+        .and_then(|a| a.get(Value::from("forge.ai/gang-size")))
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok());
 
@@ -266,10 +271,7 @@ pub fn parse_fabric_ai_job(
         _ => None,
     };
 
-    let priority = spec
-        .get("priority")
-        .and_then(|p| p.as_i64())
-        .unwrap_or(0) as u32;
+    let priority = spec.get("priority").and_then(|p| p.as_i64()).unwrap_or(0) as u32;
 
     let gpu_count = if mig_profile.is_some() {
         mig_count.unwrap_or(1)
@@ -310,7 +312,9 @@ pub fn parse_fabric_gpu_nodes(
                 continue;
             }
             validate_forge_doc(&doc)?;
-            let spec = doc.get("spec").ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
+            let spec = doc
+                .get("spec")
+                .ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
             let node_name = spec
                 .get("nodeName")
                 .and_then(|n| n.as_str())
@@ -319,10 +323,7 @@ pub fn parse_fabric_gpu_nodes(
                 .get("gpuType")
                 .and_then(|g| g.as_str())
                 .unwrap_or("any");
-            let gpu_count = spec
-                .get("gpuCount")
-                .and_then(|g| g.as_i64())
-                .unwrap_or(1) as u32;
+            let gpu_count = spec.get("gpuCount").and_then(|g| g.as_i64()).unwrap_or(1) as u32;
             let memory_gb = spec
                 .get("memoryGB")
                 .and_then(|m| m.as_i64())
@@ -394,7 +395,9 @@ pub fn load_forge_bundle(
     }
 
     if jobs.is_empty() {
-        return Err(ConfigError::Invalid("no FabricAIJob documents in jobs/".into()));
+        return Err(ConfigError::Invalid(
+            "no FabricAIJob documents in jobs/".into(),
+        ));
     }
 
     let cluster = parse_fabric_gpu_nodes(&cluster_dir, &gpu_registry, &hw_profiles)?;
@@ -477,8 +480,8 @@ mod tests {
             return;
         }
         let profiles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/profiles");
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/gpu_type_registry.yaml");
+        let registry =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/gpu_type_registry.yaml");
         let hw = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/hardware");
 
         let bundle = load_forge_bundle(&root, &profiles, &registry, &hw).unwrap();
@@ -506,8 +509,8 @@ mod tests {
             return;
         }
         let profiles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/profiles");
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/gpu_type_registry.yaml");
+        let registry =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/gpu_type_registry.yaml");
         let hw = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/hardware");
         let mig = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/mig");
 

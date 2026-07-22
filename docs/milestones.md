@@ -6,7 +6,7 @@
 | **M2 — Forge Compatibility** | Done | Multi-CRD ingest, corrected mappings, profiles, `--forge-bundle` CLI |
 | **M3 — Trace replay** | Done | Scheduler event JSONL replay + oracle vs FIFO diff report |
 | **M4 — MIG simulation** | Done | MIG slice partition/reconfig with simulated delay |
-| **M5 — Topology** | Planned | NVLink/PCIe graph from FabricGpuNode topology |
+| **M5 — Topology** | [Scoped](design/m5_topology.md) | NVLink/PCIe graph from FabricGpuNode topology |
 | **M6 — Forge scheduler features** | Planned | Quotas enforced, priority, gang plugin parity, preemption |
 | **M7 — RL** | Planned | Gymnasium wrapper, PPO baselines |
 | **M8 — Visualization** | Planned | Gantt, heatmaps, notebooks |

@@ -127,8 +127,11 @@ impl Cluster {
     }
 
     pub fn sort_waiting_by_arrival(&mut self) {
-        self.waiting_queue
-            .sort_by(|a, b| a.arrival_time.partial_cmp(&b.arrival_time).unwrap_or(Ordering::Equal));
+        self.waiting_queue.sort_by(|a, b| {
+            a.arrival_time
+                .partial_cmp(&b.arrival_time)
+                .unwrap_or(Ordering::Equal)
+        });
     }
 }
 
@@ -193,8 +196,16 @@ mod tests {
         }]);
         let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
         cluster.start_job(job, &["gpu-0-mig-0".into()], 0.0);
-        assert!(cluster.slice("gpu-0-mig-0").unwrap().running_job_id.is_some());
+        assert!(cluster
+            .slice("gpu-0-mig-0")
+            .unwrap()
+            .running_job_id
+            .is_some());
         cluster.finish_job("j1", 10.0);
-        assert!(cluster.slice("gpu-0-mig-0").unwrap().running_job_id.is_none());
+        assert!(cluster
+            .slice("gpu-0-mig-0")
+            .unwrap()
+            .running_job_id
+            .is_none());
     }
 }

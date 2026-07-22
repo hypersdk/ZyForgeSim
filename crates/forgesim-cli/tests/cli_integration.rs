@@ -114,10 +114,7 @@ fn cli_run_mig_config_reports_reconfigs() {
 
 #[test]
 fn cli_run_requires_config_or_bundle() {
-    let output = forge_sim()
-        .args(["run"])
-        .output()
-        .expect("spawn forge-sim");
+    let output = forge_sim().args(["run"]).output().expect("spawn forge-sim");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--config") || stderr.contains("--forge-bundle"));

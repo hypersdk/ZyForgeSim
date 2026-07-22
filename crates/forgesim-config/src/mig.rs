@@ -60,7 +60,8 @@ mod tests {
 
     #[test]
     fn loads_h100_mig_profiles() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/mig/h100_80gb.yaml");
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/mig/h100_80gb.yaml");
         if !path.exists() {
             return;
         }

@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use forgesim_config::{
-    load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file,
-    trace_diff_to_json, TraceDiffReport,
+    load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file, trace_diff_to_json,
+    TraceDiffReport,
 };
 
 fn repo_root() -> PathBuf {
@@ -81,8 +81,7 @@ fn integration_trace_replay_matches_fifo_oracle() {
     if !trace.exists() || !cluster_config.exists() {
         return;
     }
-    let cluster =
-        forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
+    let cluster = forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
     let result = run_trace_file(&trace, cluster, "fifo").expect("trace replay");
     assert_eq!(result.report.differing_placements, 0);
     assert_eq!(result.report.matching_placements, 2);
@@ -95,8 +94,7 @@ fn integration_trace_diff_report_serializes() {
     if !trace.exists() || !cluster_config.exists() {
         return;
     }
-    let cluster =
-        forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
+    let cluster = forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
     let result = run_trace_file(&trace, cluster, "fifo").expect("trace replay");
     let json = trace_diff_to_json(&result.report);
     assert!(json.contains("\"matching_placements\": 2"));

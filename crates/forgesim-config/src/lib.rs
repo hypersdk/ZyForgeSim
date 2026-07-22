@@ -6,16 +6,18 @@ pub use forge_bundle::{
     load_forge_bundle, load_gpu_type_registry, load_model_profiles, parse_fabric_ai_job,
     run_forge_bundle, ForgeBundle, GpuTypeRegistry, ModelProfile,
 };
-pub use mig::{load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster};
-pub use trace::{
-    compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
-    oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
-    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement, TraceDiffReport,
-    TraceEvent, TraceReplayResult,
+pub use mig::{
+    load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+pub use trace::{
+    compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
+    oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
+    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement,
+    TraceDiffReport, TraceEvent, TraceReplayResult,
+};
 
 use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::SimulationEngine;
@@ -189,10 +191,7 @@ pub fn build_cluster(
         let mut gpus = Vec::new();
         for gpu_spec in &node_spec.gpus {
             let profile = profiles.get(&gpu_spec.profile).ok_or_else(|| {
-                ConfigError::Invalid(format!(
-                    "unknown hardware profile '{}'",
-                    gpu_spec.profile
-                ))
+                ConfigError::Invalid(format!("unknown hardware profile '{}'", gpu_spec.profile))
             })?;
             let mut gpu = Gpu::new(
                 gpu_spec.id.clone(),
@@ -301,13 +300,16 @@ mod tests {
 
     #[test]
     fn load_workload_with_mig_fields() {
-        let workload = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/workloads/mig_m4.yaml");
+        let workload =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/workloads/mig_m4.yaml");
         if !workload.exists() {
             return;
         }
         let jobs = load_workload(&workload).unwrap();
-        let mig = jobs.iter().find(|j| j.id == "mig-infer-a").expect("mig job");
+        let mig = jobs
+            .iter()
+            .find(|j| j.id == "mig-infer-a")
+            .expect("mig job");
         assert_eq!(mig.mig_profile.as_deref(), Some("1g.10gb"));
         assert_eq!(mig.mig_count, Some(2));
         assert!(mig.is_mig_job());
