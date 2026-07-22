@@ -1,0 +1,315 @@
+mod forge_bundle;
+mod mig;
+mod trace;
+
+pub use forge_bundle::{
+    load_forge_bundle, load_gpu_type_registry, load_model_profiles, parse_fabric_ai_job,
+    run_forge_bundle, ForgeBundle, GpuTypeRegistry, ModelProfile,
+};
+pub use mig::{load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster};
+pub use trace::{
+    compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
+    oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
+    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement, TraceDiffReport,
+    TraceEvent, TraceReplayResult,
+};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use forgesim_core::cluster::Cluster;
+use forgesim_core::engine::SimulationEngine;
+use forgesim_core::models::{Gpu, Job, Node};
+use forgesim_core::resource::ResourceManager;
+use forgesim_metrics::SimulationMetrics;
+use forgesim_scheduler::FifoScheduler;
+use serde::Deserialize;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("yaml error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+    #[error("config error: {0}")]
+    Invalid(String),
+}
+
+pub type ConfigResult<T> = Result<T, ConfigError>;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HardwareProfile {
+    pub name: String,
+    pub memory_gb: f64,
+    #[serde(default)]
+    pub sm: Option<u32>,
+    #[serde(default)]
+    pub mig_profiles: Vec<String>,
+    #[serde(default)]
+    pub nvlink_bw_gbs: Option<f64>,
+    #[serde(default)]
+    pub pcie_bw_gbs: Option<f64>,
+    #[serde(default)]
+    pub mig: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GpuSpec {
+    pub id: String,
+    pub profile: String,
+    #[serde(default)]
+    pub nvlink_group: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodeSpec {
+    pub id: String,
+    pub gpus: Vec<GpuSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterConfig {
+    pub nodes: Vec<NodeSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchedulerConfig {
+    #[serde(default = "default_scheduler")]
+    pub r#type: String,
+}
+
+fn default_scheduler() -> String {
+    "fifo".into()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkloadRef {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SimulationConfig {
+    pub cluster: ClusterConfig,
+    pub scheduler: SchedulerConfig,
+    pub workload: WorkloadRef,
+    #[serde(default = "default_hardware_dir")]
+    pub hardware_profiles_dir: String,
+    #[serde(default = "default_mig_profiles_dir")]
+    pub mig_profiles_dir: String,
+}
+
+fn default_hardware_dir() -> String {
+    "configs/hardware".into()
+}
+
+fn default_mig_profiles_dir() -> String {
+    "../mig".into()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkloadJobSpec {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub arrival_time: f64,
+    pub runtime: f64,
+    pub gpu_count: u32,
+    #[serde(default)]
+    pub gpu_memory_gb: f64,
+    #[serde(default)]
+    pub priority: u32,
+    #[serde(default)]
+    pub tenant: Option<String>,
+    #[serde(default)]
+    pub network_bw_gbps: Option<f64>,
+    #[serde(default)]
+    pub mig_profile: Option<String>,
+    #[serde(default)]
+    pub mig_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkloadConfig {
+    pub jobs: Vec<WorkloadJobSpec>,
+}
+
+pub fn load_hardware_profiles(dir: &Path) -> ConfigResult<HashMap<String, HardwareProfile>> {
+    let mut profiles = HashMap::new();
+    if !dir.exists() {
+        return Ok(profiles);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        let profile: HardwareProfile = serde_yaml::from_str(&content)?;
+        profiles.insert(profile.name.clone(), profile);
+    }
+    Ok(profiles)
+}
+
+pub fn load_simulation_config(path: &Path) -> ConfigResult<SimulationConfig> {
+    let content = fs::read_to_string(path)?;
+    Ok(serde_yaml::from_str(&content)?)
+}
+
+pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
+    let content = fs::read_to_string(path)?;
+    let workload: WorkloadConfig = serde_yaml::from_str(&content)?;
+    Ok(workload
+        .jobs
+        .into_iter()
+        .map(|j| Job {
+            id: j.id,
+            name: j.name.unwrap_or_else(|| "job".into()),
+            arrival_time: j.arrival_time,
+            runtime: j.runtime,
+            gpu_count: j.gpu_count,
+            gpu_memory_gb: j.gpu_memory_gb,
+            priority: j.priority,
+            tenant: j.tenant,
+            network_bw_gbps: j.network_bw_gbps,
+            mig_profile: j.mig_profile,
+            mig_count: j.mig_count,
+            ..Job::new("", "", 0.0, 0.0, 0)
+        })
+        .collect())
+}
+
+pub fn build_cluster(
+    cluster_cfg: &ClusterConfig,
+    profiles: &HashMap<String, HardwareProfile>,
+) -> ConfigResult<Cluster> {
+    let mut nodes = Vec::new();
+    for node_spec in &cluster_cfg.nodes {
+        let mut gpus = Vec::new();
+        for gpu_spec in &node_spec.gpus {
+            let profile = profiles.get(&gpu_spec.profile).ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "unknown hardware profile '{}'",
+                    gpu_spec.profile
+                ))
+            })?;
+            let mut gpu = Gpu::new(
+                gpu_spec.id.clone(),
+                node_spec.id.clone(),
+                gpu_spec.profile.clone(),
+                profile.memory_gb,
+            );
+            gpu.nvlink_group = gpu_spec.nvlink_group;
+            gpu.mig_capable = profile.mig;
+            gpus.push(gpu);
+        }
+        nodes.push(Node {
+            id: node_spec.id.clone(),
+            gpus,
+        });
+    }
+    Ok(Cluster::new(nodes))
+}
+
+pub fn resolve_path(base: &Path, relative: &str) -> PathBuf {
+    let p = PathBuf::from(relative);
+    if p.is_absolute() {
+        p
+    } else {
+        base.join(p)
+    }
+}
+
+pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
+    let config = load_simulation_config(config_path)?;
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let hw_dir = resolve_path(base, &config.hardware_profiles_dir);
+    let profiles = load_hardware_profiles(&hw_dir)?;
+
+    let workload_path = resolve_path(base, &config.workload.path);
+    let jobs = load_workload(&workload_path)?;
+    let jobs_total = jobs.len();
+
+    let cluster = build_cluster(&config.cluster, &profiles)?;
+    let hardware_names: Vec<String> = config
+        .cluster
+        .nodes
+        .iter()
+        .flat_map(|n| n.gpus.iter().map(|g| g.profile.clone()))
+        .collect();
+    let any_mig_capable = cluster.all_gpus().any(|g| g.mig_capable);
+    let any_mig_job = jobs.iter().any(|j| j.is_mig_job());
+    let mig_dir = resolve_path(base, &config.mig_profiles_dir);
+    let mig_registry = if any_mig_job || any_mig_capable {
+        resolve_mig_registry_for_cluster(&mig_dir, &hardware_names, any_mig_capable)?
+    } else {
+        None
+    };
+    if any_mig_job && mig_registry.is_none() {
+        return Err(ConfigError::Invalid(
+            "workload contains MIG jobs but no MIG profile registry is configured".into(),
+        ));
+    }
+
+    let resource_manager = match mig_registry {
+        Some(registry) => ResourceManager::with_mig(registry),
+        None => ResourceManager::new(),
+    };
+
+    let mut engine = match config.scheduler.r#type.as_str() {
+        "fifo" => SimulationEngine::with_resource_manager(cluster, FifoScheduler, resource_manager),
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "unsupported scheduler type '{other}'"
+            )));
+        }
+    };
+
+    engine.submit_jobs(jobs);
+    engine.run();
+
+    Ok(SimulationMetrics::from_cluster(&engine.cluster, jobs_total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_sample_workload() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/workloads/synthetic_m1.yaml");
+        if root.exists() {
+            let jobs = load_workload(&root).unwrap();
+            assert!(!jobs.is_empty());
+        }
+    }
+
+    #[test]
+    fn runs_mig_workload() {
+        let config = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/clusters/mig_single.yaml");
+        if !config.exists() {
+            return;
+        }
+        let metrics = run_simulation(&config).unwrap();
+        assert_eq!(metrics.jobs_completed, metrics.jobs_total);
+        assert!(metrics.mig_reconfigs >= 1);
+    }
+
+    #[test]
+    fn load_workload_with_mig_fields() {
+        let workload = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/workloads/mig_m4.yaml");
+        if !workload.exists() {
+            return;
+        }
+        let jobs = load_workload(&workload).unwrap();
+        let mig = jobs.iter().find(|j| j.id == "mig-infer-a").expect("mig job");
+        assert_eq!(mig.mig_profile.as_deref(), Some("1g.10gb"));
+        assert_eq!(mig.mig_count, Some(2));
+        assert!(mig.is_mig_job());
+    }
+}
