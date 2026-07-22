@@ -1,0 +1,8 @@
+model: llama-70b
+profiles:
+  H100:
+    runtime_seconds: 3480
+    gpu_memory_gb: 80
+  A100:
+    runtime_seconds: 4200
+    gpu_memory_gb: 80
