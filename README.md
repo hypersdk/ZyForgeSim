@@ -110,4 +110,4 @@ See [docs/forge_input.md](docs/forge_input.md) for CRD mapping rules, export wor
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).
