@@ -1,0 +1,226 @@
+use std::fs;
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use forgesim_config::{
+    load_cluster_from_config, load_forge_bundle, run_forge_bundle, run_simulation,
+    run_trace_file, trace_diff_to_json,
+};
+
+#[derive(Parser)]
+#[command(name = "forge-sim", about = "ForgeSim GPU cluster scheduler simulator")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run a simulation
+    Run {
+        /// Path to simulation config YAML (internal format)
+        #[arg(short, long, conflicts_with = "forge_bundle")]
+        config: Option<PathBuf>,
+        /// Path to Forge export bundle directory
+        #[arg(long)]
+        forge_bundle: Option<PathBuf>,
+        /// Calibrated model profiles directory
+        #[arg(long, default_value = "configs/profiles")]
+        profiles_dir: PathBuf,
+        /// GPU type to hardware profile registry
+        #[arg(long, default_value = "configs/gpu_type_registry.yaml")]
+        gpu_type_registry: PathBuf,
+        /// Hardware profiles for cluster GPU memory
+        #[arg(long, default_value = "configs/hardware")]
+        hardware_profiles_dir: PathBuf,
+        /// MIG partition profiles directory
+        #[arg(long, default_value = "configs/mig")]
+        mig_profiles_dir: PathBuf,
+        /// Write metrics JSON to this path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Replay a scheduler event trace and compare against a simulated policy
+    Replay {
+        /// Path to scheduler event trace (JSONL)
+        #[arg(long)]
+        trace: PathBuf,
+        /// Cluster config YAML (internal format)
+        #[arg(short, long, conflicts_with = "forge_bundle")]
+        config: Option<PathBuf>,
+        /// Forge export bundle directory (cluster loaded from cluster/)
+        #[arg(long)]
+        forge_bundle: Option<PathBuf>,
+        /// GPU type to hardware profile registry (with --forge-bundle)
+        #[arg(long, default_value = "configs/gpu_type_registry.yaml")]
+        gpu_type_registry: PathBuf,
+        /// Hardware profiles for cluster GPU memory (with --forge-bundle)
+        #[arg(long, default_value = "configs/hardware")]
+        hardware_profiles_dir: PathBuf,
+        /// Calibrated model profiles directory (with --forge-bundle, unused for trace replay)
+        #[arg(long, default_value = "configs/profiles")]
+        profiles_dir: PathBuf,
+        /// Scheduler policy to simulate
+        #[arg(long, default_value = "fifo")]
+        scheduler: String,
+        /// Write diff report JSON to this path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+fn print_metrics(
+    metrics: forgesim_metrics::SimulationMetrics,
+    output: Option<PathBuf>,
+) {
+    println!("ForgeSim results");
+    println!("  makespan:          {:.2}", metrics.makespan);
+    println!("  mean wait time:    {:.2}", metrics.mean_wait_time);
+    println!("  gpu utilization:   {:.2}%", metrics.gpu_utilization * 100.0);
+    println!(
+        "  jobs completed:    {}/{}",
+        metrics.jobs_completed, metrics.jobs_total
+    );
+    if metrics.mig_reconfigs > 0 {
+        println!("  mig reconfigs:     {}", metrics.mig_reconfigs);
+    }
+
+    let json = metrics.to_json_pretty();
+    if let Some(out) = output {
+        fs::write(&out, &json).unwrap_or_else(|e| {
+            eprintln!("failed to write output: {e}");
+            std::process::exit(1);
+        });
+        println!("  metrics written:   {}", out.display());
+    } else {
+        let default_out = PathBuf::from("outputs/metrics.json");
+        if fs::create_dir_all("outputs").is_ok() {
+            let _ = fs::write(&default_out, &json);
+            println!("  metrics written:   {}", default_out.display());
+        }
+    }
+}
+
+fn print_trace_report(
+    report: forgesim_config::TraceDiffReport,
+    output: Option<PathBuf>,
+) {
+    println!("ForgeSim trace replay ({})", report.scheduler);
+    println!(
+        "  oracle schedules:  {}",
+        report.oracle_schedules
+    );
+    println!(
+        "  matching:          {}/{}",
+        report.matching_placements, report.oracle_schedules
+    );
+    println!(
+        "  differing:         {}",
+        report.differing_placements
+    );
+    println!(
+        "  sim makespan:      {:.2}",
+        report.simulation_metrics.makespan
+    );
+
+    for diff in &report.diffs {
+        if diff.placement_match && diff.schedule_time_match {
+            continue;
+        }
+        println!(
+            "  diff {}: oracle {:?} @ {:.2} vs sim {:?} @ {:.2}",
+            diff.job_id,
+            diff.oracle.gpu_ids,
+            diff.oracle.timestamp,
+            diff.simulated.gpu_ids,
+            diff.simulated.start_time
+        );
+    }
+
+    let json = trace_diff_to_json(&report);
+    if let Some(out) = output {
+        fs::write(&out, &json).unwrap_or_else(|e| {
+            eprintln!("failed to write output: {e}");
+            std::process::exit(1);
+        });
+        println!("  report written:    {}", out.display());
+    } else {
+        let default_out = PathBuf::from("outputs/trace_diff.json");
+        if fs::create_dir_all("outputs").is_ok() {
+            let _ = fs::write(&default_out, &json);
+            println!("  report written:    {}", default_out.display());
+        }
+    }
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Run {
+            config,
+            forge_bundle,
+            profiles_dir,
+            gpu_type_registry,
+            hardware_profiles_dir,
+            mig_profiles_dir,
+            output,
+        } => {
+            let metrics = if let Some(bundle) = forge_bundle {
+                run_forge_bundle(
+                    &bundle,
+                    &profiles_dir,
+                    &gpu_type_registry,
+                    &hardware_profiles_dir,
+                    &mig_profiles_dir,
+                )
+            } else if let Some(config) = config {
+                run_simulation(&config)
+            } else {
+                eprintln!("error: provide --config or --forge-bundle");
+                std::process::exit(1);
+            }
+            .unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            });
+
+            print_metrics(metrics, output);
+        }
+        Commands::Replay {
+            trace,
+            config,
+            forge_bundle,
+            gpu_type_registry,
+            hardware_profiles_dir,
+            profiles_dir,
+            scheduler,
+            output,
+        } => {
+            let cluster = if let Some(bundle) = forge_bundle {
+                load_forge_bundle(
+                    &bundle,
+                    &profiles_dir,
+                    &gpu_type_registry,
+                    &hardware_profiles_dir,
+                )
+                .map(|b| b.cluster)
+            } else if let Some(config) = config {
+                load_cluster_from_config(&config)
+            } else {
+                eprintln!("error: provide --config or --forge-bundle for cluster topology");
+                std::process::exit(1);
+            }
+            .unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            });
+
+            let result = run_trace_file(&trace, cluster, &scheduler).unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            });
+
+            print_trace_report(result.report, output);
+        }
+    }
+}

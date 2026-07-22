@@ -1,0 +1,10 @@
+# Maps Forge FabricAIJob spec.gpuType to ForgeSim hardware profile names
+mappings:
+  H100: H100_80GB
+  H200: H200_141GB
+  A100: H100_80GB
+  A100-80G: H100_80GB
+  A100-80GB: H100_80GB
+  L40: H100_80GB
+  L40S: H100_80GB
+  any: H100_80GB
