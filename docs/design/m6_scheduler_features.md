@@ -25,7 +25,11 @@ together — recommend separate PRs in the order below.
   `integration_forge_bundle_quota_delays_second_job`
   (`crates/forgesim-config/tests/integration.rs`), which proves two
   same-tenant jobs that *could* run concurrently on the raw GPU count
-  instead serialize under a tight quota.
+  instead serialize under a tight quota. Live-cluster testing later found
+  that real Forge's own quota enforcement doesn't actually match this
+  model — see `docs/forge_input.md`'s "Known divergence from real Forge"
+  note under "Tenant GPU quotas" for what was found (async, best-effort,
+  doesn't block placement).
 - **Priority — done.** `PriorityScheduler` (`crates/forgesim-scheduler/src/priority.rs`)
   sorts the waiting queue by `(priority desc, arrival_time asc)` via
   `Cluster::sort_waiting_by_priority`, then places jobs through the same
