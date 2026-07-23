@@ -57,6 +57,23 @@ pub struct Job {
     /// the one that actually matches the job's current run.
     #[serde(default, skip_serializing)]
     pub run_generation: u32,
+    /// Cumulative GPU-seconds consumed across all run segments (incl. preemption).
+    #[serde(default, skip_serializing)]
+    pub gpu_seconds_consumed: f64,
+    /// Time spent in `Waiting` state only (excludes time running before eviction).
+    #[serde(default, skip_serializing)]
+    pub cumulative_wait_secs: f64,
+    #[serde(default, skip_serializing)]
+    pub time_to_first_start: Option<f64>,
+    /// Clock time when this job last entered the waiting queue.
+    #[serde(default, skip_serializing)]
+    pub waiting_since: Option<f64>,
+    /// Absolute deadline for gang scheduling; cleared once the job starts.
+    #[serde(default, skip_serializing)]
+    pub gang_deadline: Option<f64>,
+    /// Bumped when gang timeout is (re)scheduled or invalidated on start.
+    #[serde(default, skip_serializing)]
+    pub gang_timeout_generation: u32,
 }
 
 impl Job {
@@ -91,13 +108,43 @@ impl Job {
             remaining_runtime: None,
             preemption_count: 0,
             run_generation: 0,
+            gpu_seconds_consumed: 0.0,
+            cumulative_wait_secs: 0.0,
+            time_to_first_start: None,
+            waiting_since: None,
+            gang_deadline: None,
+            gang_timeout_generation: 0,
         }
     }
 
+    /// Legacy wait metric: last start minus arrival (overstates wait after preemption).
     pub fn wait_time(&self) -> f64 {
         match (self.start_time, self.state) {
             (Some(start), _) => (start - self.arrival_time).max(0.0),
-            _ => 0.0,
+            _ => self.cumulative_wait_secs,
+        }
+    }
+
+    pub fn cumulative_wait_time(&self) -> f64 {
+        self.cumulative_wait_secs
+    }
+
+    pub(crate) fn record_gpu_segment(&mut self, segment_start: f64, segment_end: f64) {
+        let elapsed = (segment_end - segment_start).max(0.0);
+        self.gpu_seconds_consumed += elapsed * self.gpu_count as f64;
+    }
+
+    pub fn enter_waiting(&mut self, at_time: f64) {
+        self.state = JobState::Waiting;
+        self.waiting_since = Some(at_time);
+    }
+
+    pub fn account_wait_until(&mut self, start_time: f64) {
+        if let Some(since) = self.waiting_since.take() {
+            self.cumulative_wait_secs += (start_time - since).max(0.0);
+        }
+        if self.time_to_first_start.is_none() {
+            self.time_to_first_start = Some(start_time);
         }
     }
 
@@ -111,15 +158,24 @@ impl Job {
     /// reduce `duration_remaining()` by however long it just ran, and
     /// reset scheduling state so it can be placed again later.
     pub fn requeue_after_preemption(&mut self, at_time: f64) {
+        if let Some(start) = self.start_time {
+            self.record_gpu_segment(start, at_time);
+        }
         let elapsed = self
             .start_time
             .map(|start| (at_time - start).max(0.0))
             .unwrap_or(0.0);
         self.remaining_runtime = Some((self.duration_remaining() - elapsed).max(0.0));
-        self.state = JobState::Waiting;
         self.start_time = None;
         self.assigned_gpus.clear();
         self.preemption_count += 1;
+        self.gang_timeout_generation += 1;
+        if self.gang_enabled {
+            if let Some(timeout) = self.gang_timeout_secs.filter(|t| *t > 0.0) {
+                self.gang_deadline = Some(at_time + timeout);
+            }
+        }
+        self.enter_waiting(at_time);
     }
 
     pub fn is_mig_job(&self) -> bool {
@@ -141,7 +197,7 @@ impl Job {
 
 #[cfg(test)]
 mod job_tests {
-    use super::Job;
+    use super::{Job, JobState};
 
     #[test]
     fn mig_slices_needed_defaults_to_one() {
@@ -183,6 +239,7 @@ mod job_tests {
         job.start_time = Some(10.0);
         job.requeue_after_preemption(30.0); // ran for 20s of its 100s
 
+        assert_eq!(job.state, JobState::Waiting);
         assert_eq!(job.duration_remaining(), 80.0);
         assert_eq!(job.preemption_count, 1);
         assert!(job.start_time.is_none());
@@ -202,6 +259,14 @@ mod job_tests {
         job.start_time = Some(0.0);
         job.requeue_after_preemption(50.0); // "ran" longer than its runtime
         assert_eq!(job.duration_remaining(), 0.0);
+    }
+
+    #[test]
+    fn requeue_records_gpu_seconds_consumed() {
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 2);
+        job.start_time = Some(0.0);
+        job.requeue_after_preemption(25.0);
+        assert_eq!(job.gpu_seconds_consumed, 50.0);
     }
 }
 

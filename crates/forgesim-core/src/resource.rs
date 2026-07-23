@@ -95,8 +95,7 @@ impl ResourceManager {
         }
 
         let (selected, used_penalty) = if let Some(nodes) = gang_nodes_needed(job) {
-            let ids = select_gang_gpus(cluster, job, nodes).expect("can_place implied selection");
-            (ids, false)
+            select_gang_gpus(cluster, job, nodes).expect("can_place implied selection")
         } else if wants_topology_aware(job) {
             select_gpus_topology_aware(cluster, job).expect("can_place implied selection")
         } else {
@@ -246,6 +245,13 @@ impl Default for ResourceManager {
     }
 }
 
+fn gpu_type_matches(gpu: &crate::models::Gpu, job: &Job) -> bool {
+    match job.gpu_type.as_deref() {
+        Some(requested) => gpu.profile == requested,
+        None => true,
+    }
+}
+
 fn memory_eligible(gpu: &crate::models::Gpu, job: &Job) -> bool {
     job.gpu_memory_gb <= 0.0 || gpu.memory_gb >= job.gpu_memory_gb
 }
@@ -253,7 +259,7 @@ fn memory_eligible(gpu: &crate::models::Gpu, job: &Job) -> bool {
 fn eligible_free_gpus<'a>(cluster: &'a Cluster, job: &Job) -> Vec<&'a crate::models::Gpu> {
     cluster
         .all_gpus()
-        .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job))
+        .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job) && gpu_type_matches(g, job))
         .collect()
 }
 
@@ -274,23 +280,31 @@ fn gpus_per_gang_node(job: &Job, nodes: u32) -> Option<u32> {
 }
 
 /// Gang jobs require `nodes` distinct nodes each with `gpu_count / nodes` free GPUs.
-fn select_gang_gpus(cluster: &Cluster, job: &Job, nodes: u32) -> Option<Vec<String>> {
+/// Prefers NVLink-coherent GPU picks within each node; sets `used_penalty` on scatter fallback.
+fn select_gang_gpus(cluster: &Cluster, job: &Job, nodes: u32) -> Option<(Vec<String>, bool)> {
     let per_node = gpus_per_gang_node(job, nodes)?;
 
-    let mut node_candidates: Vec<(String, Vec<String>)> = cluster
+    let mut node_candidates: Vec<(String, Vec<String>, bool)> = cluster
         .nodes
         .iter()
         .filter_map(|node| {
-            let ids: Vec<String> = node
+            let free: Vec<_> = node
                 .gpus
                 .iter()
-                .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job))
-                .map(|g| g.id.clone())
+                .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job) && gpu_type_matches(g, job))
                 .collect();
-            if ids.len() >= per_node as usize {
-                Some((node.id.clone(), ids))
+            if free.len() < per_node as usize {
+                return None;
+            }
+            if let Some((ids, penalty)) = select_nvlink_coherent(&free, per_node) {
+                Some((node.id.clone(), ids, penalty))
             } else {
-                None
+                let ids: Vec<String> = free
+                    .iter()
+                    .take(per_node as usize)
+                    .map(|g| g.id.clone())
+                    .collect();
+                Some((node.id.clone(), ids, true))
             }
         })
         .collect();
@@ -299,19 +313,45 @@ fn select_gang_gpus(cluster: &Cluster, job: &Job, nodes: u32) -> Option<Vec<Stri
         return None;
     }
 
-    // Prefer nodes with fewer spare GPUs (tighter packing), then stable id order.
     node_candidates.sort_by(|a, b| {
-        a.1.len()
-            .cmp(&b.1.len())
+        a.2.cmp(&b.2)
+            .then_with(|| a.1.len().cmp(&b.1.len()))
             .then_with(|| a.0.cmp(&b.0))
     });
 
     let mut selected = Vec::with_capacity(job.gpu_count as usize);
-    for (_, mut gpu_ids) in node_candidates.into_iter().take(nodes as usize) {
+    let mut used_penalty = false;
+    for (_, mut gpu_ids, penalty) in node_candidates.into_iter().take(nodes as usize) {
         gpu_ids.truncate(per_node as usize);
+        used_penalty |= penalty;
         selected.extend(gpu_ids);
     }
-    Some(selected)
+    Some((selected, used_penalty))
+}
+
+fn select_nvlink_coherent(
+    free: &[&crate::models::Gpu],
+    per_node: u32,
+) -> Option<(Vec<String>, bool)> {
+    use std::collections::HashMap;
+    let mut by_group: HashMap<Option<u32>, Vec<&crate::models::Gpu>> = HashMap::new();
+    for gpu in free {
+        by_group.entry(gpu.nvlink_group).or_default().push(*gpu);
+    }
+    let mut best: Option<(Vec<String>, bool)> = None;
+    for gpus in by_group.values() {
+        if gpus.len() >= per_node as usize {
+            let ids: Vec<String> = gpus
+                .iter()
+                .take(per_node as usize)
+                .map(|g| g.id.clone())
+                .collect();
+            if best.as_ref().map(|(b, _)| ids.len() < b.len()).unwrap_or(true) {
+                best = Some((ids, false));
+            }
+        }
+    }
+    best
 }
 
 fn wants_topology_aware(job: &Job) -> bool {
@@ -321,7 +361,7 @@ fn wants_topology_aware(job: &Job) -> bool {
 fn select_gpus_scatter(cluster: &Cluster, job: &Job) -> Option<Vec<String>> {
     let mut selected = Vec::new();
     for gpu in cluster.all_gpus() {
-        if !gpu.is_whole_gpu_free() || !memory_eligible(gpu, job) {
+        if !gpu.is_whole_gpu_free() || !memory_eligible(gpu, job) || !gpu_type_matches(gpu, job) {
             continue;
         }
         selected.push(gpu.id.clone());
@@ -728,6 +768,30 @@ mod tests {
         let placement = rm.allocate(&mut cluster, &job, 0.0).unwrap();
         assert_eq!(placement.gpu_ids.len(), 2);
         assert_eq!(cluster.topology_penalties, 1);
+    }
+
+    #[test]
+    fn gpu_type_mismatch_blocks_placement() {
+        let cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "A100_80GB", 80.0)],
+        }]);
+        let rm = ResourceManager::new();
+        let mut job = Job::new("j1", "train", 0.0, 10.0, 1);
+        job.gpu_type = Some("H100_80GB".into());
+        assert!(!rm.can_place(&cluster, &job));
+    }
+
+    #[test]
+    fn gpu_type_match_allows_placement() {
+        let cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100_80GB", 80.0)],
+        }]);
+        let rm = ResourceManager::new();
+        let mut job = Job::new("j1", "train", 0.0, 10.0, 1);
+        job.gpu_type = Some("H100_80GB".into());
+        assert!(rm.can_place(&cluster, &job));
     }
 
     #[test]
