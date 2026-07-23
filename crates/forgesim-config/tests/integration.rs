@@ -195,3 +195,65 @@ fn integration_mig_workload_tracks_reconfigs() {
     assert!(metrics.mig_reconfigs >= 1);
     assert!(metrics.makespan >= 90.0);
 }
+
+#[test]
+fn integration_topology_workload_completes() {
+    let config = repo_root().join("configs/clusters/topology_h100.yaml");
+    if !config.exists() {
+        return;
+    }
+    let report = forgesim_config::run_simulation_report(&config).expect("topology simulation");
+    assert_eq!(report.metrics.jobs_completed, report.metrics.jobs_total);
+    assert!(report.metrics.makespan > 0.0);
+}
+
+#[test]
+fn integration_gang_job_waits_for_node_capacity() {
+    let config = repo_root().join("configs/clusters/gang_m6.yaml");
+    if !config.exists() {
+        return;
+    }
+    let report = forgesim_config::run_simulation_report(&config).expect("gang simulation");
+    assert_eq!(report.metrics.jobs_completed, 2);
+    let gang = report
+        .timeline
+        .jobs
+        .iter()
+        .find(|j| j.name == "gang-wait")
+        .expect("gang job");
+    assert!(gang.start_time.unwrap_or(0.0) >= 60.0);
+}
+
+#[test]
+fn integration_rl_session_fifo_completes() {
+    let config = repo_root().join("configs/clusters/rl_small.yaml");
+    if !config.exists() {
+        return;
+    }
+    let mut session = forgesim_config::load_rl_session(&config).expect("rl session");
+    session.reset();
+    let top_k = session.top_k;
+    while !session.is_done() {
+        let obs = session.observe();
+        let action = if obs.waiting > 0 { 0 } else { top_k };
+        session.step(action);
+    }
+    let metrics = forgesim_metrics::SimulationMetrics::from_cluster(
+        &session.cluster,
+        session.jobs_total,
+    );
+    assert_eq!(metrics.jobs_completed, metrics.jobs_total);
+    assert!(metrics.makespan > 0.0);
+}
+
+#[test]
+fn integration_simulation_writes_jobs_timeline() {
+    let config = repo_root().join("configs/clusters/small_h100.yaml");
+    if !config.exists() {
+        return;
+    }
+    let report = forgesim_config::run_simulation_report(&config).expect("simulation");
+    assert!(!report.timeline.jobs.is_empty());
+    let json = report.timeline.to_json_pretty();
+    assert!(json.contains("\"job_id\""));
+}
