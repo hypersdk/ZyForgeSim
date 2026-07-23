@@ -1,4 +1,5 @@
 pub mod cluster;
+pub mod decision_log;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -10,6 +11,7 @@ pub mod snapshot;
 pub mod topology;
 
 pub use cluster::Cluster;
+pub use decision_log::SchedulerDecision;
 pub use engine::{Scheduler, SimulationEngine};
 pub use error::SimError;
 pub use events::{Event, EventKind, EventQueue};

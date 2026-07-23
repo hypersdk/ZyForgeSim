@@ -86,6 +86,14 @@ impl<S: Scheduler> SimulationEngine<S> {
                 });
             }
         }
+        self.cluster.record_decision(
+            crate::decision_log::SchedulerDecision::new(
+                self.cluster.clock,
+                "job_arrival",
+                format!("Job '{}' arrived", job.name),
+            )
+            .with_job(&job.id, &job.name),
+        );
         self.cluster.enqueue_job(job);
         self.try_schedule();
     }
@@ -97,7 +105,16 @@ impl<S: Scheduler> SimulationEngine<S> {
             .iter()
             .any(|j| j.id == job_id && j.state == JobState::Waiting);
         if still_waiting {
-            self.cluster.fail_waiting_job(job_id, self.cluster.clock);
+            if let Some(job) = self.cluster.fail_waiting_job(job_id, self.cluster.clock) {
+                self.cluster.record_decision(
+                    crate::decision_log::SchedulerDecision::new(
+                        self.cluster.clock,
+                        "gang_timeout",
+                        format!("Gang job '{}' failed (timeout)", job.name),
+                    )
+                    .with_job(&job.id, &job.name),
+                );
+            }
             self.try_schedule();
         }
     }
@@ -110,7 +127,17 @@ impl<S: Scheduler> SimulationEngine<S> {
             Some(job) if job.run_generation == run_generation => {}
             _ => return,
         }
-        self.cluster.finish_job(job_id, self.cluster.clock);
+        if let Some(job) = self.cluster.finish_job(job_id, self.cluster.clock) {
+            self.cluster.record_decision(
+                crate::decision_log::SchedulerDecision::new(
+                    self.cluster.clock,
+                    "job_complete",
+                    format!("Job '{}' completed", job.name),
+                )
+                .with_job(&job.id, &job.name)
+                .with_gpus(job.assigned_gpus.clone()),
+            );
+        }
         self.try_schedule();
     }
 
@@ -130,6 +157,19 @@ impl<S: Scheduler> SimulationEngine<S> {
                 let run_generation = job.run_generation;
                 self.cluster
                     .start_job(job.clone(), &placement.gpu_ids, placement.start_time);
+                self.cluster.record_decision(
+                    crate::decision_log::SchedulerDecision::new(
+                        placement.start_time,
+                        "job_scheduled",
+                        format!(
+                            "Scheduled '{}' on {} GPU(s)",
+                            job.name,
+                            placement.gpu_ids.len()
+                        ),
+                    )
+                    .with_job(&job.id, &job.name)
+                    .with_gpus(placement.gpu_ids.clone()),
+                );
                 self.event_queue.push(Event {
                     time: placement.start_time + duration,
                     kind: EventKind::JobComplete,

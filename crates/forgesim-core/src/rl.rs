@@ -101,6 +101,29 @@ impl RlSession {
         self.observe().to_feature_vector()
     }
 
+    pub fn decisions(&self) -> &[crate::decision_log::SchedulerDecision] {
+        &self.cluster.decision_log
+    }
+
+    /// Auto-pick the first placeable waiting job, or noop to advance time.
+    pub fn step_fifo(&mut self) -> StepResult {
+        if self.done {
+            return StepResult {
+                observation: self.observe(),
+                reward: 0.0,
+                done: true,
+                placed: false,
+                invalid_action: false,
+            };
+        }
+        let mask = self.placeable_mask();
+        let action = mask
+            .iter()
+            .position(|&p| p)
+            .unwrap_or(self.top_k);
+        self.step(action)
+    }
+
     pub fn step(&mut self, action: usize) -> StepResult {
         if self.done {
             return StepResult {
@@ -191,6 +214,19 @@ impl RlSession {
         let run_generation = job.run_generation;
         self.cluster
             .start_job(job.clone(), &placement.gpu_ids, placement.start_time);
+        self.cluster.record_decision(
+            crate::decision_log::SchedulerDecision::new(
+                placement.start_time,
+                "job_scheduled",
+                format!(
+                    "Scheduled '{}' on {} GPU(s)",
+                    job.name,
+                    placement.gpu_ids.len()
+                ),
+            )
+            .with_job(&job.id, &job.name)
+            .with_gpus(placement.gpu_ids.clone()),
+        );
         self.event_queue.push(Event {
             time: placement.start_time + duration,
             kind: EventKind::JobComplete,

@@ -21,6 +21,8 @@ pub struct Cluster {
     /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
     /// Tenants with no entry are unrestricted.
     pub tenant_quotas: HashMap<String, u32>,
+    /// Scheduler decisions recorded for replay / UI animation.
+    pub decision_log: Vec<crate::decision_log::SchedulerDecision>,
 }
 
 impl Cluster {
@@ -37,7 +39,12 @@ impl Cluster {
             topology_runtime_inflation: 0.0,
             topology: TopologyGraph::default(),
             tenant_quotas: HashMap::new(),
+            decision_log: Vec::new(),
         }
+    }
+
+    pub fn record_decision(&mut self, decision: crate::decision_log::SchedulerDecision) {
+        self.decision_log.push(decision);
     }
 
     /// GPUs currently held by `tenant` across its running jobs.
