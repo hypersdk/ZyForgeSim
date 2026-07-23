@@ -75,6 +75,31 @@ fn integration_forge_bundle_gang_and_mig_fields() {
 }
 
 #[test]
+fn integration_forge_bundle_quota_delays_second_job() {
+    let bundle = repo_root().join("tests/fixtures/forge_quota");
+    if !bundle.exists() {
+        return;
+    }
+    // Cluster has 4 GPUs and both 2-GPU jobs could run concurrently, but
+    // the tenant's FabricQuota caps it at 2 GPUs — job B must wait for
+    // job A to finish and free the quota before it can start.
+    let metrics = run_forge_bundle(
+        &bundle,
+        &repo_root().join("configs/profiles"),
+        &repo_root().join("configs/gpu_type_registry.yaml"),
+        &repo_root().join("configs/hardware"),
+        &repo_root().join("configs/mig"),
+    )
+    .expect("forge bundle simulation");
+    assert_eq!(metrics.jobs_completed, 2);
+    // Without quota enforcement both jobs run in parallel and makespan
+    // equals one job's runtime (604800s); quota enforcement serializes
+    // them, doubling it.
+    assert_eq!(metrics.makespan, 1_209_600.0);
+    assert!(metrics.mean_wait_time > 0.0);
+}
+
+#[test]
 fn integration_trace_replay_matches_fifo_oracle() {
     let trace = repo_root().join("tests/fixtures/traces/fifo_match.jsonl");
     let cluster_config = repo_root().join("configs/clusters/single_gpu.yaml");
