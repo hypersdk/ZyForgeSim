@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   file or directory" when the target directory does not already exist.
 - `forgesim-py` failed to compile after `mig_reconfigs` was added to
   `SimulationMetrics` (M4); the Python `SimResult` binding now exposes it too.
+- A stale `JobComplete` event scheduled before a job was preempted could,
+  if that job was later resumed, fire after the resumed run had already
+  started — incorrectly finishing it early and freeing its GPU while the
+  resumed run was still actually using it. Fixed with a
+  `Job::run_generation` counter that lets the engine tell a stale
+  completion apart from the one that matches the job's current run.
 
 ### Added
 - CI workflows for Rust (`fmt`, `clippy`, unit + integration tests) and
@@ -28,6 +34,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `scheduler.type: priority` in internal YAML configs or `--scheduler
   priority` on `forge-sim run --forge-bundle` / `forge-sim replay`. Does
   not preempt already-running jobs.
+- M6 (preemption slice): new `PreemptivePriorityScheduler`
+  (`scheduler.type: preemptive` / `--scheduler preemptive`) — a waiting
+  job may evict lower-priority running jobs to fit. Evicted jobs resume
+  later with their remaining runtime (no restart penalty), and become
+  exempt from further preemption after 3 evictions. New
+  `SimulationMetrics.preemptions` field, printed by the CLI as
+  `preemptions:` when nonzero. See `docs/forge_input.md` and
+  `docs/design/m6_scheduler_features.md`.
 
 ## [0.1.0] — M1–M4
 

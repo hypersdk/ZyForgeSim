@@ -8,7 +8,7 @@ use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::Job;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
+use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -299,6 +299,7 @@ pub fn run_trace_replay(
     let (metrics, cluster) = match scheduler {
         "fifo" => run_and_finish(cluster, FifoScheduler, jobs, jobs_total),
         "priority" => run_and_finish(cluster, PriorityScheduler, jobs, jobs_total),
+        "preemptive" => run_and_finish(cluster, PreemptivePriorityScheduler, jobs, jobs_total),
         other => {
             return Err(ConfigError::Invalid(format!(
                 "unsupported scheduler type '{other}' for trace replay"

@@ -23,8 +23,13 @@ Rust workspace
 ## Simulation loop
 
 1. Jobs arrive via `JobArrival` events
-2. Scheduler selects waiting jobs and allocates GPUs (all-or-nothing)
-3. `JobComplete` events free resources and trigger re-scheduling
+2. Scheduler selects waiting jobs and allocates GPUs (all-or-nothing); a
+   preemptive scheduler may also evict lower-priority running jobs back
+   into the waiting queue to make room
+3. `JobComplete` events free resources and trigger re-scheduling — each
+   carries the `Job::run_generation` it completes, so a stale event from a
+   run that was preempted before finishing is ignored rather than
+   corrupting the job's later, actual completion
 4. Clock advances only to the next event (no polling)
 
 ## Design invariants
@@ -38,4 +43,4 @@ Rust workspace
 
 Whole-GPU placement, FIFO scheduler, YAML configs, metrics JSON output.
 
-Future milestones add topology graphs, tenant quotas, gang scheduling policy, preemption, and RL wrappers.
+Tenant quotas, priority scheduling, and preemption landed in M6. Future milestones add topology graphs (M5), Forge gang plugin parity, and RL wrappers (M7).

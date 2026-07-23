@@ -24,7 +24,7 @@ use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
+use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -266,6 +266,13 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         "priority" => run_to_completion(
             cluster,
             PriorityScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
+        "preemptive" => run_to_completion(
+            cluster,
+            PreemptivePriorityScheduler,
             resource_manager,
             jobs,
             jobs_total,

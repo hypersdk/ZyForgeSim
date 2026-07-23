@@ -43,6 +43,17 @@ pub struct Job {
     pub finish_time: Option<f64>,
     #[serde(default, skip_serializing)]
     pub assigned_gpus: Vec<String>,
+    /// Seconds of work left, set when a job has been preempted at least
+    /// once. `None` means "use the full `runtime`" (never preempted).
+    #[serde(default, skip_serializing)]
+    pub remaining_runtime: Option<f64>,
+    #[serde(default, skip_serializing)]
+    pub preemption_count: u32,
+    /// Bumped each time this job (re)starts running. Lets the engine tell
+    /// a stale `JobComplete` (scheduled before a preemption) apart from
+    /// the one that actually matches the job's current run.
+    #[serde(default, skip_serializing)]
+    pub run_generation: u32,
 }
 
 impl Job {
@@ -73,6 +84,9 @@ impl Job {
             start_time: None,
             finish_time: None,
             assigned_gpus: Vec::new(),
+            remaining_runtime: None,
+            preemption_count: 0,
+            run_generation: 0,
         }
     }
 
@@ -81,6 +95,27 @@ impl Job {
             (Some(start), _) => (start - self.arrival_time).max(0.0),
             _ => 0.0,
         }
+    }
+
+    /// How long this job still needs to run, accounting for any prior
+    /// preemption.
+    pub fn duration_remaining(&self) -> f64 {
+        self.remaining_runtime.unwrap_or(self.runtime)
+    }
+
+    /// Evict this job from a running state back into the waiting queue:
+    /// reduce `duration_remaining()` by however long it just ran, and
+    /// reset scheduling state so it can be placed again later.
+    pub fn requeue_after_preemption(&mut self, at_time: f64) {
+        let elapsed = self
+            .start_time
+            .map(|start| (at_time - start).max(0.0))
+            .unwrap_or(0.0);
+        self.remaining_runtime = Some((self.duration_remaining() - elapsed).max(0.0));
+        self.state = JobState::Waiting;
+        self.start_time = None;
+        self.assigned_gpus.clear();
+        self.preemption_count += 1;
     }
 
     pub fn is_mig_job(&self) -> bool {
@@ -130,6 +165,39 @@ mod job_tests {
     fn wait_time_is_zero_before_start() {
         let job = Job::new("j1", "a", 5.0, 10.0, 1);
         assert_eq!(job.wait_time(), 0.0);
+    }
+
+    #[test]
+    fn duration_remaining_defaults_to_full_runtime() {
+        let job = Job::new("j1", "a", 0.0, 100.0, 1);
+        assert_eq!(job.duration_remaining(), 100.0);
+    }
+
+    #[test]
+    fn requeue_after_preemption_subtracts_elapsed_time() {
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.start_time = Some(10.0);
+        job.requeue_after_preemption(30.0); // ran for 20s of its 100s
+
+        assert_eq!(job.duration_remaining(), 80.0);
+        assert_eq!(job.preemption_count, 1);
+        assert!(job.start_time.is_none());
+        assert!(job.assigned_gpus.is_empty());
+
+        // A second preemption continues from the reduced remaining time.
+        job.start_time = Some(40.0);
+        job.requeue_after_preemption(55.0); // ran another 15s of the 80s left
+
+        assert_eq!(job.duration_remaining(), 65.0);
+        assert_eq!(job.preemption_count, 2);
+    }
+
+    #[test]
+    fn requeue_after_preemption_never_goes_negative() {
+        let mut job = Job::new("j1", "a", 0.0, 10.0, 1);
+        job.start_time = Some(0.0);
+        job.requeue_after_preemption(50.0); // "ran" longer than its runtime
+        assert_eq!(job.duration_remaining(), 0.0);
     }
 }
 

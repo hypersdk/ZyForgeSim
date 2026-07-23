@@ -48,6 +48,37 @@ fn integration_priority_scheduler_prefers_high_priority_job() {
 }
 
 #[test]
+fn integration_preemptive_scheduler_evicts_for_higher_priority_arrival() {
+    let priority_config = repo_root().join("configs/clusters/preemption_priority.yaml");
+    let preemptive_config = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !priority_config.exists() || !preemptive_config.exists() {
+        return;
+    }
+    // job-low starts immediately at t=0 (the GPU is free) and is still
+    // running when job-high (much higher priority) arrives at t=10 — a
+    // case non-preemptive priority ordering can't help with, since
+    // job-high simply wasn't in the waiting queue yet when job-low was
+    // placed. The preemptive scheduler evicts job-low, runs job-high right
+    // away, then resumes job-low with its remaining runtime. Same total
+    // GPU-seconds of work either way (single GPU serializes everything),
+    // so makespan matches, but the preemptive run gets job-high started
+    // immediately instead of after job-low's full 100s runtime.
+    let priority_metrics = run_simulation(&priority_config).expect("priority simulation");
+    let preemptive_metrics = run_simulation(&preemptive_config).expect("preemptive simulation");
+
+    assert_eq!(priority_metrics.jobs_completed, priority_metrics.jobs_total);
+    assert_eq!(
+        preemptive_metrics.jobs_completed,
+        preemptive_metrics.jobs_total
+    );
+    assert_eq!(priority_metrics.makespan, preemptive_metrics.makespan);
+
+    assert_eq!(priority_metrics.preemptions, 0);
+    assert_eq!(preemptive_metrics.preemptions, 1);
+    assert!(preemptive_metrics.mean_wait_time < priority_metrics.mean_wait_time);
+}
+
+#[test]
 fn integration_forge_bundle_fifo_simulation() {
     let bundle = repo_root().join("tests/fixtures/forge");
     if !bundle.exists() {

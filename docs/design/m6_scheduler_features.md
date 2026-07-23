@@ -1,9 +1,8 @@
 # M6 — Forge scheduler features (scoping)
 
-Status: quotas and priority done; gang plugin parity and preemption still
-planned. This is a design scope, not a full implementation plan for the
-remaining pieces — flags open questions to resolve before writing code.
-Same format as [M5's scoping doc](m5_topology.md).
+Status: quotas, priority, and preemption done; gang plugin parity still
+blocked (see open question below). Same format as
+[M5's scoping doc](m5_topology.md).
 
 M6 bundles four mostly-independent features from `docs/milestones.md`:
 quotas, priority, gang plugin parity, preemption. They don't need to land
@@ -53,15 +52,65 @@ together — recommend separate PRs in the order below.
   sufficient depending on what "Forge gang plugin parity" needs to mean
   (see open questions). `ForgeScheduler` is an empty stub with a stale
   comment ("milestone 4").
-- **Preemption**: no support at any layer. `JobState` has no `Preempted`
-  variant (`Pending | Waiting | Running | Finished`,
-  `crates/forgesim-core/src/models.rs`). More fundamentally,
-  `SimulationEngine::try_schedule` (`crates/forgesim-core/src/engine.rs:84`)
-  only ever calls `Scheduler::schedule` with the *waiting* queue — a
-  `Scheduler` impl has no way to touch `running_jobs` or cause a running
-  job to stop. And once a `JobComplete` event is pushed to the event queue
-  at `start_job` time, it isn't cancelable — there's no event-removal API
-  on `EventQueue`. This is an engine-level gap, not just a scheduler one.
+- **Preemption — done.** `PreemptivePriorityScheduler`
+  (`crates/forgesim-scheduler/src/preemptive.rs`) extends priority ordering:
+  a waiting job that can't currently fit may evict lower-priority running
+  jobs (lowest priority first) via the new `Cluster::evict_job` /
+  `resume_evicted_job` pair, trying eviction candidates one at a time via
+  `resource_manager.can_place` until either the job fits (commit — requeue
+  the victims) or candidates run out (undo — restore everything evicted).
+  Selectable via `scheduler.type: preemptive` / `--scheduler preemptive`,
+  same as the other schedulers.
+
+  Design decisions, resolving the open questions this doc used to list:
+  - **Trigger** (was Q2): pure priority — a waiting job may only evict a
+    *strictly lower priority* running one; quota is unrelated to
+    preemption eligibility.
+  - **Mechanics** (was Q3): resolved differently than originally
+    suggested. The doc's original plan — let a stale `JobComplete` fire as
+    a no-op once the job is no longer in `running_jobs` — turns out to be
+    **unsafe**: if the same job is *resumed* before its stale event fires,
+    that event finds the job back in `running_jobs` (just a different run)
+    and would incorrectly finish it early, at the wrong time, freeing its
+    GPU while the resumed run is still actually using it. Fixed with a
+    `Job::run_generation` counter, bumped on every (re)start; `Event`
+    carries the generation it completes, and
+    `SimulationEngine::handle_complete` ignores an event whose generation
+    doesn't match the job's current one. See
+    `engine::tests::stale_job_complete_from_before_a_preemption_does_not_finish_the_resumed_run`
+    for the regression test. `EventQueue` itself needed no removal API.
+  - **Re-arrival / runtime accounting**: evicted jobs resume with
+    *remaining* runtime, not a full restart — `Job::remaining_runtime`
+    tracks seconds left, reduced by however long the last run segment
+    lasted (`Job::requeue_after_preemption`). Total GPU-seconds consumed
+    still equals the original `runtime` (segments sum to the original
+    duration), so `gpu_utilization` accounting needed no changes. Original
+    `arrival_time` is preserved (not reset to eviction time) — matches how
+    `wait_time()` already reads `start_time - arrival_time`, though note
+    this now *overstates* wait time for a preempted job since it also
+    counts the time it spent actually running before eviction; a more
+    precise "cumulative actual wait" metric was judged not worth the extra
+    state for this first cut.
+  - **Starvation prevention** (was Q4): a job that's already been
+    preempted `MAX_PREEMPTIONS` (3) times becomes exempt from further
+    eviction, via `Job::preemption_count`.
+  - **Scope**: only whole-GPU jobs trigger eviction (a MIG job that
+    doesn't fit is left waiting, no eviction attempted) to avoid mixing
+    preemption with MIG reconfiguration delay. Victims can still be MIG
+    jobs.
+  - **Metrics** (was Q5): `SimulationMetrics.preemptions` (from
+    `Cluster.total_preemptions`) is now populated; the CLI prints a
+    `preemptions:` line when nonzero, matching `mig_reconfigs`.
+
+  Covered by scheduler-level unit tests (`preemptive.rs`: evicts for a
+  higher-priority arrival, does not evict equal/higher priority, restores
+  cleanly when eviction wouldn't free enough capacity), an engine-level
+  regression test for the stale-event bug above, and
+  `integration_preemptive_scheduler_evicts_for_higher_priority_arrival`
+  (`crates/forgesim-config/tests/integration.rs`), which demonstrates the
+  concrete case non-preemptive priority ordering can't handle: a
+  low-priority job already *running* when a much higher-priority one
+  arrives.
 
 ## Open questions
 
@@ -71,44 +120,25 @@ together — recommend separate PRs in the order below.
    node grouping, min-available thresholds). Needs either a spec from the
    Forge side or a decision to scope this down to "atomic multi-node gang
    placement with node-count-aware bin packing," which is buildable without
-   external input.
-2. **Preemption trigger**: pure priority (any higher-priority waiting job
-   can evict a lower-priority running one) vs. quota-driven (only evict to
-   satisfy a tenant's own quota, never cross-tenant) vs. both. Needs a
-   decision because it changes the fairness model entirely.
-3. **Preemption mechanics**: does the engine need `EventQueue` support for
-   removing/invalidating a pending `JobComplete` event, or is it simpler to
-   let the stale `JobComplete` fire as a no-op (job already removed from
-   `running_jobs`) and rely on `Cluster::finish_job`'s `Option` return
-   already handling "job not found" gracefully? The latter avoids touching
-   `EventQueue` at all — worth checking before assuming a queue API change
-   is needed.
-4. **Preempted job's re-arrival**: does it re-enter `waiting_queue` at its
-   original `arrival_time` (preserves FIFO fairness, may starve if
-   repeatedly preempted) or at preemption time (simpler, but a job could be
-   preempted forever)? Needs a starvation-prevention answer either way
-   (e.g. priority boost after N preemptions) or this will misbehave on
-   contended clusters.
-5. **Metrics**: `forgesim-metrics::SimulationMetrics` has no fields for
-   preemption count or time spent preempted — needed to make it observable
-   in `forge-sim run` output. (Quota holds are already observable
-   indirectly via `mean_wait_time` / `makespan`, see the quota integration
-   test.)
+   external input. This is the only remaining open question — still
+   blocking `ForgeScheduler` (currently an empty stub).
 
 ## Suggested order
 
 1. ~~**Quotas**~~ — done, see above.
 2. ~~**Priority scheduler**~~ — done, see above.
-3. **Gang plugin parity** — blocked on open question 1. Until that's
+3. ~~**Preemption**~~ — done, see above.
+4. **Gang plugin parity** — blocked on open question 1. Until that's
    answered, no code to write here beyond what M2 already did.
-4. **Preemption** — largest, touches the engine (`try_schedule` needs a
-   path to evict running jobs, not just place waiting ones) and needs
-   answers to questions 2–4 first. Do this last.
 
 ## Non-goals for M6
 
 - Cross-cluster or hierarchical quotas (namespace + team + cluster-wide) —
   `FabricQuota` today is flat per-team; match that.
-- Preemption cost modeling (e.g. checkpoint/restart overhead delaying the
-  preempted job's eventual resume) — track as a possible M6 follow-up, not
-  in the first slice.
+- Preemption cost modeling (checkpoint/restart overhead delaying a
+  preempted job's eventual resume) — the current model assumes free,
+  instant checkpointing (resumed jobs pick up exactly where they left
+  off). Modeling real restart overhead is a possible follow-up, not
+  implemented.
+- Quota-driven preemption (evicting to satisfy a tenant's own quota) —
+  only priority-driven eviction is implemented.

@@ -11,6 +11,7 @@ pub struct Cluster {
     pub finished_jobs: Vec<Job>,
     pub clock: f64,
     pub mig_reconfigs: u32,
+    pub total_preemptions: u32,
     /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
     /// Tenants with no entry are unrestricted.
     pub tenant_quotas: HashMap<String, u32>,
@@ -25,6 +26,7 @@ impl Cluster {
             finished_jobs: Vec::new(),
             clock: 0.0,
             mig_reconfigs: 0,
+            total_preemptions: 0,
             tenant_quotas: HashMap::new(),
         }
     }
@@ -79,6 +81,27 @@ impl Cluster {
         job.finish_time = Some(finish_time);
         self.finished_jobs.push(job.clone());
         Some(job)
+    }
+
+    /// Remove a running job and free its GPUs, without finishing it.
+    /// Returns the job exactly as it was running (unmodified) so the
+    /// caller can either restore it via `resume_evicted_job` (if freeing
+    /// it didn't actually help) or requeue it via
+    /// `Job::requeue_after_preemption`.
+    pub fn evict_job(&mut self, job_id: &str) -> Option<Job> {
+        let job = self.running_jobs.remove(job_id)?;
+        for resource_id in &job.assigned_gpus {
+            self.mark_resource_free(resource_id);
+        }
+        Some(job)
+    }
+
+    /// Undo `evict_job`: put a job back exactly as it was running.
+    pub fn resume_evicted_job(&mut self, job: Job) {
+        for resource_id in &job.assigned_gpus {
+            self.mark_resource_busy(resource_id, &job.id);
+        }
+        self.running_jobs.insert(job.id.clone(), job);
     }
 
     pub fn mark_resource_busy(&mut self, resource_id: &str, job_id: &str) {
@@ -239,6 +262,37 @@ mod tests {
         assert_eq!(cluster.tenant_gpu_usage("acme"), 1);
         assert_eq!(cluster.tenant_gpu_usage("other"), 1);
         assert_eq!(cluster.tenant_gpu_usage("nobody"), 0);
+    }
+
+    #[test]
+    fn evict_job_frees_gpus_without_finishing() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
+        cluster.start_job(job, &["gpu-0".into()], 0.0);
+        assert_eq!(cluster.free_gpu_count(), 1);
+
+        let evicted = cluster.evict_job("j1").expect("job was running");
+        assert_eq!(evicted.id, "j1");
+        assert_eq!(cluster.free_gpu_count(), 2);
+        assert!(!cluster.running_jobs.contains_key("j1"));
+        assert!(cluster.finished_jobs.is_empty());
+    }
+
+    #[test]
+    fn resume_evicted_job_restores_running_state() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
+        cluster.start_job(job, &["gpu-0".into()], 0.0);
+
+        let evicted = cluster.evict_job("j1").unwrap();
+        cluster.resume_evicted_job(evicted);
+
+        assert_eq!(cluster.free_gpu_count(), 1);
+        assert!(cluster.running_jobs.contains_key("j1"));
+        assert_eq!(
+            cluster.gpu("gpu-0").unwrap().running_job_id.as_deref(),
+            Some("j1")
+        );
     }
 
     #[test]

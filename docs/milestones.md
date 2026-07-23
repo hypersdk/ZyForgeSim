@@ -7,7 +7,7 @@
 | **M3 — Trace replay** | Done | Scheduler event JSONL replay + oracle vs FIFO diff report |
 | **M4 — MIG simulation** | Done | MIG slice partition/reconfig with simulated delay |
 | **M5 — Topology** | [Scoped](design/m5_topology.md) | NVLink/PCIe graph from FabricGpuNode topology |
-| **M6 — Forge scheduler features** | In progress ([scope](design/m6_scheduler_features.md)) | Quotas enforced (done), priority scheduler (done), gang plugin parity, preemption |
+| **M6 — Forge scheduler features** | In progress ([scope](design/m6_scheduler_features.md)) | Quotas (done), priority (done), preemption (done), gang plugin parity (blocked) |
 | **M7 — RL** | Planned | Gymnasium wrapper, PPO baselines |
 | **M8 — Visualization** | Planned | Gantt, heatmaps, notebooks |
 
@@ -80,6 +80,12 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
       `--scheduler priority` (`forge-sim run --forge-bundle`, `forge-sim
       replay`) — highest `priority` first, ties broken by earliest
       arrival. Does not preempt already-running jobs.
+- [x] Preemption: `scheduler.type: preemptive` / `--scheduler preemptive`
+      — a waiting job may evict lower-priority running jobs to fit;
+      evicted jobs resume later with their remaining runtime (no restart
+      penalty), up to 3 preemptions each before becoming exempt.
+      `preemptions` tracked in metrics output. See
+      `design/m6_scheduler_features.md` for the design (including a real
+      stale-event correctness bug found and fixed along the way).
 - [ ] Gang plugin parity (blocked on a spec for Forge's `ForgeGang` plugin
       behavior — see `design/m6_scheduler_features.md`)
-- [ ] Preemption

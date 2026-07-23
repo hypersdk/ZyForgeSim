@@ -8,7 +8,7 @@ use forgesim_core::cluster::Cluster;
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
+use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use serde_yaml::Value;
 
@@ -475,6 +475,13 @@ pub fn run_forge_bundle(
         "priority" => crate::run_to_completion(
             bundle.cluster,
             PriorityScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        "preemptive" => crate::run_to_completion(
+            bundle.cluster,
+            PreemptivePriorityScheduler,
             resource_manager,
             bundle.jobs,
             jobs_total,

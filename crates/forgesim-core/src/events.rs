@@ -12,6 +12,12 @@ pub struct Event {
     pub time: f64,
     pub kind: EventKind,
     pub job_id: String,
+    /// For `JobComplete`: the `Job::run_generation` this event completes.
+    /// If a job is preempted and restarted before this event fires, its
+    /// generation moves on and the event is stale — the engine ignores it
+    /// instead of finishing a run that isn't the one it was scheduled for.
+    /// Unused for `JobArrival`.
+    pub run_generation: u32,
 }
 
 impl PartialEq for Event {
@@ -80,11 +86,13 @@ mod tests {
             time: 10.0,
             kind: EventKind::JobComplete,
             job_id: "a".into(),
+            run_generation: 1,
         });
         q.push(Event {
             time: 5.0,
             kind: EventKind::JobArrival,
             job_id: "b".into(),
+            run_generation: 0,
         });
         assert_eq!(q.pop().unwrap().time, 5.0);
         assert_eq!(q.pop().unwrap().time, 10.0);
