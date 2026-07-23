@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   resumed run was still actually using it. Fixed with a
   `Job::run_generation` counter that lets the engine tell a stale
   completion apart from the one that matches the job's current run.
+- `--forge-bundle` ingest silently found zero jobs/nodes/quotas when fed
+  the output of `kubectl get <resource> -A -o yaml` — exactly the export
+  command `docs/forge_input.md` documents. `kubectl` wraps multiple
+  resources in a single `kind: List` document with an `items:` array
+  instead of `---`-separating them; the YAML parser only ever split on
+  `---` and never unwrapped `List`. Found by exporting and replaying a
+  real Forge deployment. `yaml_documents()` now unwraps `kind: List`.
 
 ### Added
 - CI workflows for Rust (`fmt`, `clippy`, unit + integration tests) and
