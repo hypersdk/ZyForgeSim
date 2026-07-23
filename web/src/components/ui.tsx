@@ -4,43 +4,95 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } 
 
 export function Card({
   title,
+  description,
   children,
   className,
+  variant = "default",
 }: {
   title?: string;
+  description?: string;
   children: React.ReactNode;
   className?: string;
+  variant?: "default" | "action";
 }) {
   return (
-    <section className={clsx("zyvor-card", className)}>
+    <section className={clsx("zyvor-card", variant === "action" && "action-card", className)}>
       {title ? (
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-hs-muted">{title}</h2>
+        <div className="card-header">
+          <div className="card-title-wrap">
+            <h2 className="card-title">{title}</h2>
+            {description ? <p className="card-description">{description}</p> : null}
+          </div>
+        </div>
       ) : null}
       {children}
     </section>
   );
 }
 
-export function MetricTile({ label, value }: { label: string; value: string }) {
+export function PageHero({
+  kicker,
+  title,
+  subtitle,
+}: {
+  kicker?: string;
+  title: string;
+  subtitle?: string;
+}) {
   return (
-    <div className="rounded-hs border border-hs-border border-l-4 border-l-hs-accent bg-hs-bg/50 p-3">
-      <div className="text-xs uppercase tracking-wide text-hs-muted">{label}</div>
-      <div className="mt-1 font-mono text-xl font-semibold text-hs-heading">{value}</div>
+    <div className="page-hero">
+      {kicker ? <p className="page-hero-kicker">{kicker}</p> : null}
+      <h1 className="page-hero-title">{title}</h1>
+      {subtitle ? <p className="page-hero-subtitle">{subtitle}</p> : null}
     </div>
   );
 }
 
-export function StatusBadge({ status }: { status: string }) {
-  const color =
-    status === "completed"
-      ? "bg-hs-success/20 text-hs-success-light border border-hs-success/30"
-      : status === "running"
-        ? "bg-hs-indigo/20 text-hs-purple-light border border-hs-indigo/30"
-        : status === "failed"
-          ? "bg-hs-error/20 text-hs-error-light border border-hs-error/30"
-          : "bg-hs-surface text-hs-muted border border-hs-border";
+export function FormField({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <span className={clsx("rounded-hs px-2 py-0.5 text-xs font-medium capitalize", color)}>{status}</span>
+    <label className={clsx("form-field", className)}>
+      <span className="form-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+export function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty-state">
+      <p className="empty-state-title">{title}</p>
+      <p className="empty-state-text">{text}</p>
+    </div>
+  );
+}
+
+export function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric-tile">
+      <div className="metric-tile-label">{label}</div>
+      <div className="metric-tile-value">{value}</div>
+    </div>
+  );
+}
+
+const statusStyles: Record<string, string> = {
+  completed: "bg-hs-success/15 text-hs-success-light border border-hs-success/25",
+  running: "bg-hs-indigo/15 text-hs-purple-light border border-hs-indigo/25",
+  failed: "bg-hs-error/15 text-hs-error-light border border-hs-error/25",
+  pending: "bg-hs-surface text-hs-muted border border-hs-border",
+};
+
+export function StatusBadge({ status }: { status: string }) {
+  return (
+    <span className={clsx("status-badge", statusStyles[status] ?? statusStyles.pending)}>{status}</span>
   );
 }
 
@@ -67,16 +119,17 @@ export function AppLink({
   children: React.ReactNode;
 }) {
   return (
-    <Link href={href} className={clsx("zyvor-link text-sm", className)}>
+    <Link href={href} className={clsx("zyvor-link", className)}>
       {children}
+      <span aria-hidden="true">→</span>
     </Link>
   );
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className="zyvor-input" {...props} />;
+  return <input className="zyvor-input w-full" {...props} />;
 }
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className="zyvor-input" {...props} />;
+  return <select className="zyvor-input w-full min-w-[12rem]" {...props} />;
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Image from "next/image";
+import { HeaderAuth } from "@/components/HeaderAuth";
 import "./globals.css";
 
 const inter = Inter({
@@ -21,26 +22,29 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${jetbrains.variable}`}>
-      <body className="font-sans antialiased">
-        <header className="sticky top-0 z-50 border-b border-hs-border bg-hs-bg/80 shadow-hs-elev-2 backdrop-blur-md">
-          <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
-            <a href="/" className="flex items-center gap-3">
-              <Image
-                src="/zyvor-logo.png"
-                alt="Zyvor AI Labs"
-                width={140}
-                height={47}
-                className="h-9 w-auto"
-                priority
-              />
+      <body className="app-shell font-sans antialiased">
+        <header className="app-header">
+          <div className="app-header-inner">
+            <a href="/" className="brand-mark">
+              <div className="brand-logo-wrap">
+                <Image
+                  src="/zyvor-logo.png"
+                  alt="Zyvor AI Labs"
+                  width={120}
+                  height={40}
+                  className="h-7 w-auto"
+                  priority
+                />
+              </div>
               <div className="hidden sm:block">
-                <div className="text-sm font-semibold text-hs-heading">ForgeSim</div>
-                <div className="text-xs text-hs-muted">Simulation · Replay · Compare</div>
+                <div className="brand-copy-title">ForgeSim</div>
+                <div className="brand-copy-sub">Simulation · Replay · Compare</div>
               </div>
             </a>
+            <HeaderAuth />
           </div>
         </header>
-        <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+        <main className="app-main mx-auto max-w-7xl px-4 sm:px-6">{children}</main>
       </body>
     </html>
   );
