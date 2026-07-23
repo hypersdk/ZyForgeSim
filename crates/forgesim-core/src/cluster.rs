@@ -23,6 +23,10 @@ pub struct Cluster {
     pub tenant_quotas: HashMap<String, u32>,
     /// Scheduler decisions recorded for replay / UI animation.
     pub decision_log: Vec<crate::decision_log::SchedulerDecision>,
+    /// Peak waiting queue length observed during the simulation.
+    pub queue_max_length: usize,
+    /// Gang jobs requeued after preemption that need a new timeout event.
+    pub gang_timeout_rearm_ids: Vec<String>,
 }
 
 impl Cluster {
@@ -40,7 +44,13 @@ impl Cluster {
             topology: TopologyGraph::default(),
             tenant_quotas: HashMap::new(),
             decision_log: Vec::new(),
+            queue_max_length: 0,
+            gang_timeout_rearm_ids: Vec::new(),
         }
+    }
+
+    pub fn note_gang_timeout_rearm(&mut self, job_id: impl Into<String>) {
+        self.gang_timeout_rearm_ids.push(job_id.into());
     }
 
     pub fn record_decision(&mut self, decision: crate::decision_log::SchedulerDecision) {
@@ -72,24 +82,35 @@ impl Cluster {
         self.all_gpus().filter(|g| g.is_whole_gpu_free()).count()
     }
 
-    pub fn enqueue_job(&mut self, job: Job) {
+    pub fn enqueue_job(&mut self, mut job: Job) {
+        if job.waiting_since.is_none() {
+            job.waiting_since = Some(self.clock.max(job.arrival_time));
+        }
         self.waiting_queue.push(job);
+        self.queue_max_length = self.queue_max_length.max(self.waiting_queue.len());
     }
 
-    pub fn start_job(&mut self, job: Job, placement_resource_ids: &[String], start_time: f64) {
+    pub fn start_job(&mut self, mut job: Job, placement_resource_ids: &[String], start_time: f64) {
+        job.account_wait_until(start_time);
+        if job.gang_enabled {
+            job.gang_deadline = None;
+            job.gang_timeout_generation += 1;
+        }
         for resource_id in placement_resource_ids {
             self.mark_resource_busy(resource_id, &job.id);
         }
 
-        let mut running = job;
-        running.state = JobState::Running;
-        running.start_time = Some(start_time);
-        running.assigned_gpus = placement_resource_ids.to_vec();
-        self.running_jobs.insert(running.id.clone(), running);
+        job.state = JobState::Running;
+        job.start_time = Some(start_time);
+        job.assigned_gpus = placement_resource_ids.to_vec();
+        self.running_jobs.insert(job.id.clone(), job);
     }
 
     pub fn finish_job(&mut self, job_id: &str, finish_time: f64) -> Option<Job> {
         let mut job = self.running_jobs.remove(job_id)?;
+        if let Some(start) = job.start_time {
+            job.record_gpu_segment(start, finish_time);
+        }
         for resource_id in &job.assigned_gpus {
             self.mark_resource_free(resource_id);
         }
@@ -106,8 +127,12 @@ impl Cluster {
             .iter()
             .position(|j| j.id == job_id)?;
         let mut job = self.waiting_queue.remove(idx);
+        if let Some(since) = job.waiting_since.take() {
+            job.cumulative_wait_secs += (at_time - since).max(0.0);
+        }
         job.state = JobState::Failed;
         job.finish_time = Some(at_time);
+        job.gang_deadline = None;
         self.finished_jobs.push(job.clone());
         Some(job)
     }

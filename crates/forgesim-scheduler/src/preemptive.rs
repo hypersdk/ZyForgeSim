@@ -17,8 +17,20 @@ const MAX_PREEMPTIONS: u32 = 3;
 /// triggers it and, for now, its victims are drawn from any running job
 /// regardless of MIG-ness — see tests). A MIG job that doesn't fit is left
 /// waiting rather than attempting eviction.
-#[derive(Debug, Default, Clone)]
-pub struct PreemptivePriorityScheduler;
+#[derive(Debug, Clone)]
+pub struct PreemptivePriorityScheduler {
+    pub restart_penalty_secs: f64,
+    pub quota_aware_preemption: bool,
+}
+
+impl Default for PreemptivePriorityScheduler {
+    fn default() -> Self {
+        Self {
+            restart_penalty_secs: 0.0,
+            quota_aware_preemption: true,
+        }
+    }
+}
 
 impl Scheduler for PreemptivePriorityScheduler {
     fn schedule(
@@ -37,7 +49,7 @@ impl Scheduler for PreemptivePriorityScheduler {
             if job.is_mig_job() {
                 continue;
             }
-            if attempt_preemption(cluster, resource_manager, &job) {
+            if attempt_preemption(cluster, resource_manager, &job, self.quota_aware_preemption) {
                 try_place(cluster, resource_manager, &job, &mut placements);
             }
         }
@@ -85,11 +97,18 @@ fn attempt_preemption(
     cluster: &mut Cluster,
     resource_manager: &ResourceManager,
     job: &Job,
+    quota_aware: bool,
 ) -> bool {
     let mut candidates: Vec<String> = cluster
         .running_jobs
         .values()
-        .filter(|r| r.priority < job.priority && r.preemption_count < MAX_PREEMPTIONS)
+        .filter(|r| {
+            r.priority < job.priority
+                && r.preemption_count < MAX_PREEMPTIONS
+                && (!quota_aware
+                    || job.tenant.is_none()
+                    || r.tenant.as_deref() == job.tenant.as_deref())
+        })
         .map(|r| r.id.clone())
         .collect();
     candidates.sort_by(|a, b| {
@@ -106,9 +125,27 @@ fn attempt_preemption(
         if resource_manager.can_place(cluster, job) {
             let at_time = cluster.clock;
             for mut victim in evicted {
+                let freed_gpus = victim.assigned_gpus.clone();
                 victim.requeue_after_preemption(at_time);
                 cluster.total_preemptions += 1;
+                if victim.gang_enabled && victim.gang_deadline.is_some() {
+                    cluster.note_gang_timeout_rearm(&victim.id);
+                }
+                cluster.record_decision(
+                    forgesim_core::decision_log::SchedulerDecision::new(
+                        at_time,
+                        "job_preempted",
+                        format!(
+                            "Preempted '{}' (priority {}) for '{}'",
+                            victim.name, victim.priority, job.name
+                        ),
+                    )
+                    .with_job(&victim.id, &victim.name)
+                    .with_gpus(freed_gpus),
+                );
                 cluster.waiting_queue.push(victim);
+                cluster.queue_max_length =
+                    cluster.queue_max_length.max(cluster.waiting_queue.len());
             }
             return true;
         }
@@ -144,7 +181,7 @@ mod tests {
         high.priority = 90;
         cluster.enqueue_job(high);
 
-        let mut sched = PreemptivePriorityScheduler;
+        let mut sched = PreemptivePriorityScheduler::default();
         let rm = ResourceManager::new();
         let placements = sched.schedule(&mut cluster, &rm);
 
@@ -180,7 +217,7 @@ mod tests {
         waiting.priority = 50; // equal priority — must not preempt
         cluster.enqueue_job(waiting);
 
-        let mut sched = PreemptivePriorityScheduler;
+        let mut sched = PreemptivePriorityScheduler::default();
         let rm = ResourceManager::new();
         let placements = sched.schedule(&mut cluster, &rm);
 
@@ -214,7 +251,7 @@ mod tests {
         high.priority = 90;
         cluster.enqueue_job(high);
 
-        let mut sched = PreemptivePriorityScheduler;
+        let mut sched = PreemptivePriorityScheduler::default();
         let rm = ResourceManager::new();
         let placements = sched.schedule(&mut cluster, &rm);
 

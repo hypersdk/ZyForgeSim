@@ -17,6 +17,8 @@ pub struct SimulationEngine<S: Scheduler> {
     pub scheduler: S,
     event_queue: EventQueue,
     pending_arrivals: Vec<Job>,
+    /// Extra delay applied when restarting a previously preempted job.
+    pub preemption_restart_penalty_secs: f64,
 }
 
 impl<S: Scheduler> SimulationEngine<S> {
@@ -35,6 +37,47 @@ impl<S: Scheduler> SimulationEngine<S> {
             scheduler,
             event_queue: EventQueue::new(),
             pending_arrivals: Vec::new(),
+            preemption_restart_penalty_secs: 0.0,
+        }
+    }
+
+    pub fn with_preemption_restart_penalty(mut self, secs: f64) -> Self {
+        self.preemption_restart_penalty_secs = secs.max(0.0);
+        self
+    }
+
+    fn push_gang_timeout(&mut self, job: &Job) {
+        if !job.gang_enabled {
+            return;
+        }
+        let Some(deadline) = job.gang_deadline else {
+            return;
+        };
+        self.event_queue.push(Event {
+            time: deadline,
+            kind: EventKind::GangTimeout,
+            job_id: job.id.clone(),
+            run_generation: job.gang_timeout_generation,
+        });
+    }
+
+    fn drain_gang_timeout_rearms(&mut self) {
+        let ids = std::mem::take(&mut self.cluster.gang_timeout_rearm_ids);
+        for job_id in ids {
+            let snapshot = self
+                .cluster
+                .waiting_queue
+                .iter()
+                .find(|j| j.id == job_id)
+                .map(|j| (j.id.clone(), j.gang_deadline, j.gang_timeout_generation));
+            if let Some((id, Some(deadline), gen)) = snapshot {
+                self.event_queue.push(Event {
+                    time: deadline,
+                    kind: EventKind::GangTimeout,
+                    job_id: id,
+                    run_generation: gen,
+                });
+            }
         }
     }
 
@@ -63,7 +106,9 @@ impl<S: Scheduler> SimulationEngine<S> {
                 EventKind::JobComplete => {
                     self.handle_complete(&event.job_id, event.run_generation)
                 }
-                EventKind::GangTimeout => self.handle_gang_timeout(&event.job_id),
+                EventKind::GangTimeout => {
+                    self.handle_gang_timeout(&event.job_id, event.run_generation)
+                }
             }
         }
     }
@@ -75,15 +120,12 @@ impl<S: Scheduler> SimulationEngine<S> {
             .position(|j| j.id == job_id)
             .expect("arrival job must exist");
         let mut job = self.pending_arrivals.remove(idx);
-        job.state = JobState::Waiting;
+        job.enter_waiting(self.cluster.clock.max(job.arrival_time));
         if job.gang_enabled {
             if let Some(timeout) = job.gang_timeout_secs.filter(|t| *t > 0.0) {
-                self.event_queue.push(Event {
-                    time: job.arrival_time + timeout,
-                    kind: EventKind::GangTimeout,
-                    job_id: job.id.clone(),
-                    run_generation: 0,
-                });
+                job.gang_deadline = Some(job.arrival_time + timeout);
+                job.gang_timeout_generation += 1;
+                self.push_gang_timeout(&job);
             }
         }
         self.cluster.record_decision(
@@ -98,12 +140,12 @@ impl<S: Scheduler> SimulationEngine<S> {
         self.try_schedule();
     }
 
-    fn handle_gang_timeout(&mut self, job_id: &str) {
-        let still_waiting = self
-            .cluster
-            .waiting_queue
-            .iter()
-            .any(|j| j.id == job_id && j.state == JobState::Waiting);
+    fn handle_gang_timeout(&mut self, job_id: &str, generation: u32) {
+        let still_waiting = self.cluster.waiting_queue.iter().any(|j| {
+            j.id == job_id
+                && j.state == JobState::Waiting
+                && j.gang_timeout_generation == generation
+        });
         if still_waiting {
             if let Some(job) = self.cluster.fail_waiting_job(job_id, self.cluster.clock) {
                 self.cluster.record_decision(
@@ -145,8 +187,12 @@ impl<S: Scheduler> SimulationEngine<S> {
         let placements = self
             .scheduler
             .schedule(&mut self.cluster, &self.resource_manager);
-        for placement in placements {
+        self.drain_gang_timeout_rearms();
+        for mut placement in placements {
             if let Some(mut job) = self.take_waiting_job(&placement.job_id) {
+                if job.preemption_count > 0 && self.preemption_restart_penalty_secs > 0.0 {
+                    placement.start_time += self.preemption_restart_penalty_secs;
+                }
                 job.run_generation += 1;
                 let duration = job.duration_remaining() * placement.runtime_multiplier;
                 if placement.runtime_multiplier > 1.0 {

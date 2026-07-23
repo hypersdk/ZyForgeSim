@@ -86,6 +86,10 @@ pub struct SimulationMetrics {
     pub jobs_total: usize,
     pub queue_max_length: usize,
     #[serde(default)]
+    pub mean_cumulative_wait_time: f64,
+    #[serde(default)]
+    pub jobs_unschedulable: usize,
+    #[serde(default)]
     pub mig_reconfigs: u32,
     #[serde(default)]
     pub preemptions: u32,
@@ -114,21 +118,22 @@ impl SimulationMetrics {
             .filter_map(|j| j.finish_time)
             .fold(0.0_f64, f64::max);
 
-        let mean_wait_time = if finished_success.is_empty() {
+        let mean_cumulative_wait_time = if finished_success.is_empty() {
             0.0
         } else {
-            finished_success.iter().map(|j| j.wait_time()).sum::<f64>()
+            finished_success
+                .iter()
+                .map(|j| j.cumulative_wait_time())
+                .sum::<f64>()
                 / finished_success.len() as f64
         };
 
+        // Legacy alias: now uses cumulative wait (queue-only semantics).
+        let mean_wait_time = mean_cumulative_wait_time;
+
         let gpu_seconds_busy: f64 = finished_success
             .iter()
-            .map(|j| {
-                match (j.start_time, j.finish_time) {
-                    (Some(s), Some(f)) => (f - s).max(0.0) * j.gpu_count as f64,
-                    _ => j.runtime * j.gpu_count as f64,
-                }
-            })
+            .map(|j| j.gpu_seconds_consumed)
             .sum();
         let gpu_count = cluster.gpu_count().max(1) as f64;
         let gpu_utilization = if makespan > 0.0 {
@@ -137,13 +142,17 @@ impl SimulationMetrics {
             0.0
         };
 
+        let jobs_unschedulable = cluster.waiting_queue.len();
+
         Self {
             makespan,
             mean_wait_time,
             gpu_utilization,
             jobs_completed: finished_success.len(),
             jobs_total,
-            queue_max_length: 0,
+            queue_max_length: cluster.queue_max_length,
+            mean_cumulative_wait_time,
+            jobs_unschedulable,
             mig_reconfigs: cluster.mig_reconfigs,
             preemptions: cluster.total_preemptions,
             topology_penalties: cluster.topology_penalties,
@@ -172,11 +181,30 @@ mod tests {
         job.state = JobState::Finished;
         job.start_time = Some(0.0);
         job.finish_time = Some(10.0);
+        job.gpu_seconds_consumed = 10.0;
         cluster.finished_jobs.push(job);
         cluster.clock = 10.0;
 
         let m = SimulationMetrics::from_cluster(&cluster, 1);
         assert_eq!(m.makespan, 10.0);
         assert!((m.gpu_utilization - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gpu_utilization_uses_segment_accounting_after_preemption() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.gpu_seconds_consumed = 100.0;
+        job.state = JobState::Finished;
+        job.finish_time = Some(120.0);
+        job.preemption_count = 1;
+        cluster.finished_jobs.push(job);
+        cluster.clock = 120.0;
+
+        let m = SimulationMetrics::from_cluster(&cluster, 1);
+        assert!((m.gpu_utilization - 100.0 / 120.0).abs() < 1e-6);
     }
 }

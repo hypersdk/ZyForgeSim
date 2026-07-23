@@ -12,8 +12,8 @@ use forgesim_scheduler::{BestFitScheduler, FifoScheduler, ForgeScheduler, Priori
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    build_cluster, load_hardware_profiles, load_simulation_config, resolve_path, ConfigError,
-    ConfigResult,
+    build_cluster, build_resource_manager, load_hardware_profiles, load_simulation_config,
+    resolve_path, ConfigError, ConfigResult,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,12 +28,30 @@ pub enum TraceEvent {
         gpu_memory_gb: f64,
         #[serde(default)]
         priority: u32,
+        #[serde(default)]
+        tenant: Option<String>,
+        #[serde(default)]
+        gpu_type: Option<String>,
+        #[serde(default)]
+        network_bw_gbps: Option<f64>,
+        #[serde(default)]
+        gang_enabled: bool,
+        #[serde(default)]
+        gang_size_nodes: Option<u32>,
+        #[serde(default)]
+        gang_timeout_secs: Option<f64>,
+        #[serde(default)]
+        mig_profile: Option<String>,
+        #[serde(default)]
+        mig_count: Option<u32>,
     },
     JobScheduled {
         timestamp: f64,
         job: String,
         node: String,
         gpus: Vec<GpuRef>,
+        #[serde(default)]
+        nodes: Vec<String>,
     },
     JobCompleted {
         timestamp: f64,
@@ -149,6 +167,25 @@ fn normalize_gpu_refs(node: &str, gpus: &[GpuRef], cluster: &Cluster) -> ConfigR
     Ok(ids)
 }
 
+pub fn validate_job_gang_config(job: &Job) -> ConfigResult<()> {
+    if !job.gang_enabled {
+        return Ok(());
+    }
+    let nodes = job.gang_size_nodes.filter(|&n| n > 0).ok_or_else(|| {
+        ConfigError::Invalid(format!(
+            "job '{}' has gang_enabled but missing or invalid gang_size_nodes",
+            job.id
+        ))
+    })?;
+    if job.gpu_count % nodes != 0 {
+        return Err(ConfigError::Invalid(format!(
+            "job '{}': gpu_count {} is not divisible by gang_size_nodes {}",
+            job.id, job.gpu_count, nodes
+        )));
+    }
+    Ok(())
+}
+
 pub fn jobs_from_trace(events: &[TraceEvent]) -> ConfigResult<Vec<Job>> {
     let mut jobs = Vec::new();
     for event in events {
@@ -159,9 +196,17 @@ pub fn jobs_from_trace(events: &[TraceEvent]) -> ConfigResult<Vec<Job>> {
             runtime,
             gpu_memory_gb,
             priority,
+            tenant,
+            gpu_type,
+            network_bw_gbps,
+            gang_enabled,
+            gang_size_nodes,
+            gang_timeout_secs,
+            mig_profile,
+            mig_count,
         } = event
         {
-            jobs.push(Job {
+            let job_spec = Job {
                 id: job.clone(),
                 name: job.clone(),
                 arrival_time: *timestamp,
@@ -169,8 +214,18 @@ pub fn jobs_from_trace(events: &[TraceEvent]) -> ConfigResult<Vec<Job>> {
                 gpu_count: *gpu_count,
                 gpu_memory_gb: *gpu_memory_gb,
                 priority: *priority,
+                tenant: tenant.clone(),
+                gpu_type: gpu_type.clone(),
+                network_bw_gbps: *network_bw_gbps,
+                gang_enabled: *gang_enabled,
+                gang_size_nodes: *gang_size_nodes,
+                gang_timeout_secs: *gang_timeout_secs,
+                mig_profile: mig_profile.clone(),
+                mig_count: *mig_count,
                 ..Job::new(job, job, *timestamp, *runtime, *gpu_count)
-            });
+            };
+            validate_job_gang_config(&job_spec)?;
+            jobs.push(job_spec);
         }
     }
     if jobs.is_empty() {
@@ -192,6 +247,7 @@ pub fn oracle_placements_from_trace(
             job,
             node,
             gpus,
+            ..
         } = event
         {
             let gpu_ids = normalize_gpu_refs(node, gpus, cluster)?;
@@ -297,10 +353,10 @@ pub fn run_trace_replay(
     let jobs_total = jobs.len();
 
     let (metrics, cluster) = match scheduler {
-        "fifo" => run_and_finish(cluster, FifoScheduler, jobs, jobs_total),
-        "priority" => run_and_finish(cluster, PriorityScheduler, jobs, jobs_total),
-        "preemptive" | "forge" => run_and_finish(cluster, ForgeScheduler, jobs, jobs_total),
-        "bestfit" => run_and_finish(cluster, BestFitScheduler, jobs, jobs_total),
+        "fifo" => run_and_finish(cluster, FifoScheduler, scheduler, jobs, jobs_total),
+        "priority" => run_and_finish(cluster, PriorityScheduler, scheduler, jobs, jobs_total),
+        "preemptive" | "forge" => run_and_finish(cluster, ForgeScheduler::default(), scheduler, jobs, jobs_total),
+        "bestfit" => run_and_finish(cluster, BestFitScheduler, scheduler, jobs, jobs_total),
         other => {
             return Err(ConfigError::Invalid(format!(
                 "unsupported scheduler type '{other}' for trace replay"
@@ -317,10 +373,12 @@ pub fn run_trace_replay(
 fn run_and_finish<S: Scheduler>(
     cluster: Cluster,
     scheduler: S,
+    scheduler_name: &str,
     jobs: Vec<Job>,
     jobs_total: usize,
 ) -> (SimulationMetrics, Cluster) {
-    let mut engine = SimulationEngine::new(cluster, scheduler);
+    let resource_manager = build_resource_manager(None, scheduler_name);
+    let mut engine = SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager);
     engine.submit_jobs(jobs);
     engine.run();
     let metrics = SimulationMetrics::from_cluster(&engine.cluster, jobs_total);
@@ -401,42 +459,55 @@ mod tests {
                 GpuRef::Index(2),
                 GpuRef::Index(3),
             ],
+            nodes: vec!["node-4".into()],
         }];
         let oracle = oracle_placements_from_trace(&events, &cluster).unwrap();
         assert_eq!(oracle[0].gpu_ids.len(), 4);
         assert_eq!(oracle[0].gpu_ids[0], "node-4-gpu-0");
     }
 
+    fn job_submitted(
+        timestamp: f64,
+        job: &str,
+        gpu_count: u32,
+        runtime: f64,
+    ) -> TraceEvent {
+        TraceEvent::JobSubmitted {
+            timestamp,
+            job: job.into(),
+            gpu_count,
+            runtime,
+            gpu_memory_gb: 0.0,
+            priority: 0,
+            tenant: None,
+            gpu_type: None,
+            network_bw_gbps: None,
+            gang_enabled: false,
+            gang_size_nodes: None,
+            gang_timeout_secs: None,
+            mig_profile: None,
+            mig_count: None,
+        }
+    }
+
     #[test]
     fn fifo_trace_replay_matches_oracle() {
         let events = vec![
-            TraceEvent::JobSubmitted {
-                timestamp: 0.0,
-                job: "j1".into(),
-                gpu_count: 1,
-                runtime: 100.0,
-                gpu_memory_gb: 0.0,
-                priority: 0,
-            },
-            TraceEvent::JobSubmitted {
-                timestamp: 5.0,
-                job: "j2".into(),
-                gpu_count: 1,
-                runtime: 50.0,
-                gpu_memory_gb: 0.0,
-                priority: 0,
-            },
+            job_submitted(0.0, "j1", 1, 100.0),
+            job_submitted(5.0, "j2", 1, 50.0),
             TraceEvent::JobScheduled {
                 timestamp: 0.0,
                 job: "j1".into(),
                 node: "node-0".into(),
                 gpus: vec![GpuRef::Id("gpu-0".into())],
+                nodes: vec!["node-0".into()],
             },
             TraceEvent::JobScheduled {
                 timestamp: 100.0,
                 job: "j2".into(),
                 node: "node-0".into(),
                 gpus: vec![GpuRef::Id("gpu-0".into())],
+                nodes: vec!["node-0".into()],
             },
         ];
 
@@ -448,39 +519,159 @@ mod tests {
     #[test]
     fn detects_scheduler_divergence() {
         let events = vec![
-            TraceEvent::JobSubmitted {
-                timestamp: 0.0,
-                job: "j1".into(),
-                gpu_count: 1,
-                runtime: 100.0,
-                gpu_memory_gb: 0.0,
-                priority: 0,
-            },
-            TraceEvent::JobSubmitted {
-                timestamp: 0.0,
-                job: "j2".into(),
-                gpu_count: 1,
-                runtime: 50.0,
-                gpu_memory_gb: 0.0,
-                priority: 0,
-            },
+            job_submitted(0.0, "j1", 1, 100.0),
+            job_submitted(0.0, "j2", 1, 50.0),
             TraceEvent::JobScheduled {
                 timestamp: 0.0,
                 job: "j2".into(),
                 node: "node-0".into(),
                 gpus: vec![GpuRef::Id("gpu-1".into())],
+                nodes: vec!["node-0".into()],
             },
             TraceEvent::JobScheduled {
                 timestamp: 50.0,
                 job: "j1".into(),
                 node: "node-0".into(),
                 gpus: vec![GpuRef::Id("gpu-0".into())],
+                nodes: vec!["node-0".into()],
             },
         ];
 
         let result = run_trace_replay(&events, two_gpu_cluster(), "fifo").unwrap();
         assert_eq!(result.report.differing_placements, 2);
         assert!(result.report.diffs.iter().all(|d| !d.placement_match));
+    }
+
+    fn bestfit_two_node_cluster() -> Cluster {
+        let mut cluster = Cluster::new(vec![
+            Node {
+                id: "wide".into(),
+                gpus: vec![
+                    Gpu::new("w0", "wide", "H100_80GB", 80.0),
+                    Gpu::new("w1", "wide", "H100_80GB", 80.0),
+                    Gpu::new("w2", "wide", "H100_80GB", 80.0),
+                    Gpu::new("w3", "wide", "H100_80GB", 80.0),
+                ],
+            },
+            Node {
+                id: "tight".into(),
+                gpus: vec![
+                    Gpu::new("t0", "tight", "H100_80GB", 80.0),
+                    Gpu::new("t1", "tight", "H100_80GB", 80.0),
+                ],
+            },
+        ]);
+        cluster.start_job(
+            Job::new("block", "block", 0.0, 100.0, 1),
+            &["w0".into()],
+            0.0,
+        );
+        cluster
+    }
+
+    #[test]
+    fn bestfit_trace_replay_packs_tight_node() {
+        let events = vec![
+            TraceEvent::JobSubmitted {
+                timestamp: 0.0,
+                job: "block".into(),
+                gpu_count: 1,
+                runtime: 100.0,
+                gpu_memory_gb: 0.0,
+                priority: 0,
+                tenant: None,
+                gpu_type: None,
+                network_bw_gbps: None,
+                gang_enabled: false,
+                gang_size_nodes: None,
+                gang_timeout_secs: None,
+                mig_profile: None,
+                mig_count: None,
+            },
+            TraceEvent::JobSubmitted {
+                timestamp: 0.0,
+                job: "pair".into(),
+                gpu_count: 2,
+                runtime: 10.0,
+                gpu_memory_gb: 0.0,
+                priority: 0,
+                tenant: None,
+                gpu_type: None,
+                network_bw_gbps: None,
+                gang_enabled: false,
+                gang_size_nodes: None,
+                gang_timeout_secs: None,
+                mig_profile: None,
+                mig_count: None,
+            },
+            TraceEvent::JobScheduled {
+                timestamp: 0.0,
+                job: "pair".into(),
+                node: "tight".into(),
+                gpus: vec![GpuRef::Id("t0".into()), GpuRef::Id("t1".into())],
+                nodes: vec!["tight".into()],
+            },
+        ];
+
+        let result = run_trace_replay(&events, bestfit_two_node_cluster(), "bestfit").unwrap();
+        assert_eq!(result.report.matching_placements, 1);
+    }
+
+    #[test]
+    fn rejects_invalid_gang_trace_job() {
+        let events = vec![TraceEvent::JobSubmitted {
+            timestamp: 0.0,
+            job: "g1".into(),
+            gpu_count: 4,
+            runtime: 10.0,
+            gpu_memory_gb: 0.0,
+            priority: 0,
+            tenant: None,
+            gpu_type: None,
+            network_bw_gbps: None,
+            gang_enabled: true,
+            gang_size_nodes: None,
+            gang_timeout_secs: Some(5.0),
+            mig_profile: None,
+            mig_count: None,
+        }];
+        assert!(jobs_from_trace(&events).is_err());
+    }
+
+    #[test]
+    fn gang_trace_schema_loads_extended_fields() {
+        let events = vec![TraceEvent::JobSubmitted {
+            timestamp: 0.0,
+            job: "g1".into(),
+            gpu_count: 4,
+            runtime: 10.0,
+            gpu_memory_gb: 0.0,
+            priority: 5,
+            tenant: Some("acme".into()),
+            gpu_type: Some("H100_80GB".into()),
+            network_bw_gbps: None,
+            gang_enabled: true,
+            gang_size_nodes: Some(2),
+            gang_timeout_secs: Some(30.0),
+            mig_profile: None,
+            mig_count: None,
+        }];
+        let jobs = jobs_from_trace(&events).unwrap();
+        assert!(jobs[0].gang_enabled);
+        assert_eq!(jobs[0].tenant.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn loads_gang_trace_fixture() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/traces/gang_m6.jsonl");
+        if !path.exists() {
+            return;
+        }
+        let events = load_trace(&path).unwrap();
+        let jobs = jobs_from_trace(&events).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert!(jobs[0].gang_enabled);
     }
 
     #[test]

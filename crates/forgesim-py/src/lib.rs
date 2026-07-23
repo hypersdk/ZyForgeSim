@@ -29,6 +29,10 @@ struct SimResult {
     topology_runtime_inflation: f64,
     #[pyo3(get)]
     jobs_failed: usize,
+    #[pyo3(get)]
+    jobs_unschedulable: usize,
+    #[pyo3(get)]
+    queue_max_length: usize,
 }
 
 impl From<SimulationMetrics> for SimResult {
@@ -44,6 +48,8 @@ impl From<SimulationMetrics> for SimResult {
             topology_penalties: m.topology_penalties,
             topology_runtime_inflation: m.topology_runtime_inflation,
             jobs_failed: m.jobs_failed,
+            jobs_unschedulable: m.jobs_unschedulable,
+            queue_max_length: m.queue_max_length,
         }
     }
 }
@@ -68,7 +74,9 @@ impl SimResult {
             gpu_utilization: self.gpu_utilization,
             jobs_completed: self.jobs_completed,
             jobs_total: self.jobs_total,
-            queue_max_length: 0,
+            queue_max_length: self.queue_max_length,
+            mean_cumulative_wait_time: self.mean_wait_time,
+            jobs_unschedulable: self.jobs_unschedulable,
             mig_reconfigs: self.mig_reconfigs,
             preemptions: self.preemptions,
             topology_penalties: self.topology_penalties,

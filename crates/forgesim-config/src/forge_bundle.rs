@@ -254,7 +254,7 @@ pub fn parse_fabric_ai_job(
     doc: &Value,
     quotas: &[Value],
     model_profiles: &HashMap<String, ModelProfile>,
-    _gpu_registry: &GpuTypeRegistry,
+    gpu_registry: &GpuTypeRegistry,
 ) -> ConfigResult<Job> {
     validate_forge_doc(doc)?;
     if kind_of(doc) != Some("FabricAIJob") {
@@ -293,18 +293,19 @@ pub fn parse_fabric_ai_job(
         .and_then(|v| v.as_str())
         .and_then(parse_duration_secs);
 
-    let gpu_type = spec
+    let gpu_type_raw = spec
         .get("gpuType")
         .and_then(|g| g.as_str())
         .unwrap_or("any")
         .to_string();
+    let gpu_type = map_gpu_type(&gpu_type_raw, gpu_registry).unwrap_or(gpu_type_raw.clone());
     let model = spec
         .get("model")
         .and_then(|m| m.as_str())
         .unwrap_or(name)
         .to_string();
 
-    let (runtime, gpu_memory_gb) = lookup_runtime(&model, &gpu_type, model_profiles)?;
+    let (runtime, gpu_memory_gb) = lookup_runtime(&model, &gpu_type_raw, model_profiles)?;
 
     let mig = spec.get("mig");
     let mig_profile = mig
@@ -330,7 +331,7 @@ pub fn parse_fabric_ai_job(
         gpu_count_from_spec(spec)
     };
 
-    Ok(Job {
+    let job = Job {
         id: format!("{namespace}/{name}"),
         name: name.to_string(),
         arrival_time: parse_arrival_time(meta),
@@ -340,7 +341,7 @@ pub fn parse_fabric_ai_job(
         priority,
         tenant: resolve_tenant(&namespace, quotas),
         network_bw_gbps: network_bw,
-        gpu_type: Some(gpu_type.clone()),
+        gpu_type: Some(gpu_type),
         namespace: Some(namespace),
         gang_enabled,
         gang_size_nodes,
@@ -348,7 +349,9 @@ pub fn parse_fabric_ai_job(
         mig_profile,
         mig_count,
         ..Job::new("", "", 0.0, 0.0, 0)
-    })
+    };
+    crate::validate_job_gang_config(&job)?;
+    Ok(job)
 }
 
 pub fn parse_fabric_gpu_nodes(

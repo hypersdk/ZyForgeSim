@@ -15,6 +15,8 @@ pub struct JobSnapshot {
     pub tenant: Option<String>,
     pub state: String,
     pub wait_proxy: f64,
+    pub cumulative_wait: f64,
+    pub gang_enabled: bool,
     pub placeable: bool,
 }
 
@@ -60,8 +62,16 @@ pub struct ClusterSnapshot {
     pub nodes: Vec<NodeSnapshot>,
 }
 
+pub fn job_current_cumulative_wait(job: &Job, clock: f64) -> f64 {
+    let mut wait = job.cumulative_wait_secs;
+    if let Some(since) = job.waiting_since {
+        wait += (clock - since).max(0.0);
+    }
+    wait
+}
+
 pub fn job_wait_proxy(job: &Job, clock: f64) -> f64 {
-    (clock - job.arrival_time).max(0.0)
+    job_current_cumulative_wait(job, clock)
 }
 
 fn job_state_str(state: JobState) -> String {
@@ -86,6 +96,8 @@ fn job_to_snapshot(job: &Job, clock: f64, placeable: bool) -> JobSnapshot {
         tenant: job.tenant.clone(),
         state: job_state_str(job.state),
         wait_proxy: job_wait_proxy(job, clock),
+        cumulative_wait: job_current_cumulative_wait(job, clock),
+        gang_enabled: job.gang_enabled,
         placeable,
     }
 }
@@ -106,7 +118,7 @@ impl ClusterSnapshot {
             })
             .collect();
 
-        let mut top_jobs = queue_jobs.iter().take(top_k).cloned().collect();
+        let top_jobs = queue_jobs.iter().take(top_k).cloned().collect();
 
         let running_jobs: Vec<_> = cluster
             .running_jobs
@@ -188,7 +200,8 @@ impl ClusterSnapshot {
             features.push(job.runtime as f32);
             features.push(job.gpu_count as f32);
             features.push(job.priority as f32);
-            features.push(job.wait_proxy as f32);
+            features.push(job.cumulative_wait as f32);
+            features.push(if job.gang_enabled { 1.0 } else { 0.0 });
             features.push(if job.placeable { 1.0 } else { 0.0 });
         }
         features
@@ -196,5 +209,5 @@ impl ClusterSnapshot {
 }
 
 pub fn obs_size(top_k: usize) -> usize {
-    5 + top_k * 6
+    5 + top_k * 7
 }

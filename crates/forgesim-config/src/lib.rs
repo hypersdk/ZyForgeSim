@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 pub use trace::{
     compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
     oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
-    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement,
-    TraceDiffReport, TraceEvent, TraceReplayResult,
+    trace_diff_to_json, validate_job_gang_config, GpuRef, OraclePlacement, PlacementDiff,
+    SimulatedPlacement, TraceDiffReport, TraceEvent, TraceReplayResult,
 };
 
 use forgesim_core::cluster::Cluster;
@@ -87,6 +87,13 @@ pub struct ClusterConfig {
     pub nodes: Vec<NodeSpec>,
     #[serde(default)]
     pub tenant_quotas: HashMap<String, u32>,
+    /// Synthetic NVLink layout: `nvlink_pairs` (default), `full_mesh`, or `pcie_only`.
+    #[serde(default = "default_topology_template")]
+    pub topology_template: String,
+}
+
+fn default_topology_template() -> String {
+    "nvlink_pairs".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -140,6 +147,8 @@ pub struct WorkloadJobSpec {
     #[serde(default)]
     pub network_bw_gbps: Option<f64>,
     #[serde(default)]
+    pub gpu_type: Option<String>,
+    #[serde(default)]
     pub mig_profile: Option<String>,
     #[serde(default)]
     pub mig_count: Option<u32>,
@@ -182,27 +191,31 @@ pub fn load_simulation_config(path: &Path) -> ConfigResult<SimulationConfig> {
 pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
     let content = fs::read_to_string(path)?;
     let workload: WorkloadConfig = serde_yaml::from_str(&content)?;
-    Ok(workload
-        .jobs
-        .into_iter()
-        .map(|j| Job {
-            id: j.id,
-            name: j.name.unwrap_or_else(|| "job".into()),
+    let mut jobs = Vec::new();
+    for j in workload.jobs {
+        let name = j.name.unwrap_or_else(|| "job".into());
+        let job = Job {
+            id: j.id.clone(),
+            name: name.clone(),
             arrival_time: j.arrival_time,
             runtime: j.runtime,
             gpu_count: j.gpu_count,
             gpu_memory_gb: j.gpu_memory_gb,
             priority: j.priority,
             tenant: j.tenant,
+            gpu_type: j.gpu_type,
             network_bw_gbps: j.network_bw_gbps,
             mig_profile: j.mig_profile,
             mig_count: j.mig_count,
             gang_enabled: j.gang_enabled,
             gang_size_nodes: j.gang_size_nodes,
             gang_timeout_secs: j.gang_timeout_secs,
-            ..Job::new("", "", 0.0, 0.0, 0)
-        })
-        .collect())
+            ..Job::new(j.id, name, j.arrival_time, j.runtime, j.gpu_count)
+        };
+        validate_job_gang_config(&job)?;
+        jobs.push(job);
+    }
+    Ok(jobs)
 }
 
 pub fn build_cluster(
@@ -222,7 +235,9 @@ pub fn build_cluster(
                 gpu_spec.profile.clone(),
                 profile.memory_gb,
             );
-            gpu.nvlink_group = gpu_spec.nvlink_group;
+            gpu.nvlink_group = gpu_spec.nvlink_group.or_else(|| {
+                apply_topology_template(&cluster_cfg.topology_template, gpu_spec, node_spec)
+            });
             gpu.mig_capable = profile.mig;
             gpus.push(gpu);
         }
@@ -249,6 +264,22 @@ pub fn build_cluster(
     cluster.topology = TopologyGraph::from_profile_bandwidths(nvlink_bw, pcie_bw);
     cluster.tenant_quotas = cluster_cfg.tenant_quotas.clone();
     Ok(cluster)
+}
+
+fn apply_topology_template(
+    template: &str,
+    gpu_spec: &GpuSpec,
+    node_spec: &NodeSpec,
+) -> Option<u32> {
+    let gpu_index = node_spec
+        .gpus
+        .iter()
+        .position(|g| g.id == gpu_spec.id)?;
+    match template {
+        "full_mesh" => Some(0),
+        "pcie_only" => Some(gpu_index as u32),
+        _ => Some((gpu_index / 2) as u32),
+    }
 }
 
 pub fn resolve_path(base: &Path, relative: &str) -> PathBuf {
@@ -354,7 +385,7 @@ pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
     ))
 }
 
-fn build_resource_manager(
+pub fn build_resource_manager(
     mig_registry: Option<forgesim_core::mig::MigProfileRegistry>,
     scheduler: &str,
 ) -> ResourceManager {
@@ -387,7 +418,7 @@ fn run_to_completion_with_policy(
         ),
         "preemptive" | "forge" => run_to_completion(
             cluster,
-            ForgeScheduler,
+            ForgeScheduler::default(),
             resource_manager,
             jobs,
             jobs_total,
