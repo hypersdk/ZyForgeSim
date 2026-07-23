@@ -81,9 +81,21 @@ fn yaml_documents(content: &str) -> ConfigResult<Vec<Value>> {
             continue;
         }
         let doc: Value = serde_yaml::from_str(trimmed)?;
-        if !doc.is_null() {
-            docs.push(doc);
+        if doc.is_null() {
+            continue;
         }
+        // `kubectl get <resource> -A -o yaml` wraps multiple resources in a
+        // single `kind: List` document with an `items:` array, rather than
+        // `---`-separating them — exactly the export command documented in
+        // docs/forge_input.md. Unwrap it so downstream kind/apiVersion
+        // checks see the actual FabricAIJob/FabricGpuNode/FabricQuota docs.
+        if kind_of(&doc) == Some("List") {
+            if let Some(items) = doc.get("items").and_then(|i| i.as_sequence()) {
+                docs.extend(items.iter().cloned());
+            }
+            continue;
+        }
+        docs.push(doc);
     }
     Ok(docs)
 }
@@ -519,6 +531,64 @@ mod tests {
     fn gpu_count_non_distributed() {
         let spec: Value = serde_yaml::from_str("gpus: 4").unwrap();
         assert_eq!(gpu_count_from_spec(&spec), 4);
+    }
+
+    #[test]
+    fn yaml_documents_unwraps_kubectl_list_output() {
+        // `kubectl get fabricaijobs -A -o yaml` (the exact command
+        // docs/forge_input.md tells users to run) wraps every matching
+        // resource in a single `kind: List` document instead of
+        // `---`-separating them.
+        let content = r#"
+apiVersion: v1
+items:
+- apiVersion: forge.ai/v1
+  kind: FabricAIJob
+  metadata:
+    name: job-a
+    namespace: default
+  spec:
+    model: llama-7b
+    gpus: 4
+    gpuType: A100
+- apiVersion: forge.ai/v1
+  kind: FabricAIJob
+  metadata:
+    name: job-b
+    namespace: default
+  spec:
+    model: gpt-13b
+    gpus: 2
+    gpuType: H100
+kind: List
+metadata:
+  resourceVersion: ""
+"#;
+        let docs = yaml_documents(content).expect("parse kubectl List output");
+        assert_eq!(docs.len(), 2);
+        assert_eq!(kind_of(&docs[0]), Some("FabricAIJob"));
+        assert_eq!(
+            docs[0]
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str()),
+            Some("job-a")
+        );
+        assert_eq!(api_version_of(&docs[1]), Some("forge.ai/v1"));
+    }
+
+    #[test]
+    fn yaml_documents_still_handles_dash_separated_docs() {
+        let content = "apiVersion: forge.ai/v1\nkind: FabricAIJob\nmetadata:\n  name: a\n---\napiVersion: forge.ai/v1\nkind: FabricAIJob\nmetadata:\n  name: b\n";
+        let docs = yaml_documents(content).expect("parse multi-doc yaml");
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn yaml_documents_empty_list_yields_no_docs() {
+        let content = "apiVersion: v1\nitems: []\nkind: List\n";
+        let docs = yaml_documents(content).expect("parse empty list");
+        assert!(docs.is_empty());
     }
 
     #[test]
