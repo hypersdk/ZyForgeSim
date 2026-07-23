@@ -517,6 +517,7 @@ pub fn run_forge_bundle_report(
     Ok(SimulationReport {
         metrics,
         timeline: JobsTimeline::from_cluster(&cluster),
+        decisions: cluster.decision_log.clone(),
     })
 }
 

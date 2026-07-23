@@ -23,6 +23,8 @@ dependencies = ["pyyaml>=6.0"]
 dev = ["pytest>=8.0", "pyyaml>=6.0"]
 rl = ["gymnasium>=0.29", "numpy>=1.26", "torch>=2.0"]
 viz = ["matplotlib>=3.8", "numpy>=1.26"]
+dashboard = ["rich>=13.0"]
+server = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "websockets>=13.0", "rich>=13.0", "pydantic>=2.0"]
 
 [project.scripts]
 forge-sim-py = "forgesim.cli:main"
