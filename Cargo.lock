@@ -161,6 +161,7 @@ name = "forgesim-py"
 version = "0.1.0"
 dependencies = [
  "forgesim-config",
+ "forgesim-core",
  "forgesim-metrics",
  "pyo3",
 ]

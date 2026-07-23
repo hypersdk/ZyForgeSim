@@ -47,9 +47,33 @@ reward. Exposed to Python as `SimSession` and wrapped by `ForgeSimEnv`.
 ## Visualization (M8)
 
 `SimulationReport` bundles aggregate metrics with a `JobsTimeline` JSON
-(finished, running, and waiting jobs). The CLI writes it via
-`--jobs-output`; Python `forgesim.viz` renders Gantt charts and GPU
-utilization heatmaps.
+(finished, running, and waiting jobs) and a `decisions` log for replay.
+The CLI writes timeline via `--jobs-output`; Python `forgesim.viz` renders
+Gantt charts and GPU utilization heatmaps.
+
+## UI stack (staged)
+
+The Rust core never knows about the UI — it exposes APIs and events only.
+
+```
+ForgeSim Core (Rust)
+        │
+Python Bindings (PyO3: SimSession, SimResult, run_report_from_config)
+        │
+   ┌────┴────┐
+   ▼         ▼
+Rich CLI   FastAPI + WebSockets
+dashboard      │
+           Next.js dashboard
+```
+
+| Phase | Deliverable | Location |
+|-------|-------------|----------|
+| 1 | Rich live terminal dashboard | `python/forgesim/dashboard/` |
+| 2 | FastAPI run registry + replay API | `python/forgesim/server/` |
+| 2 | Next.js monitor (Gantt, topology, compare) | `web/` |
+
+See [docs/ui_roadmap.md](ui_roadmap.md) for the full roadmap including Zyvor Forge integration.
 
 ## Design invariants
 

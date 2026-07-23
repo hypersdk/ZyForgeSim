@@ -36,6 +36,8 @@ use thiserror::Error;
 pub struct SimulationReport {
     pub metrics: SimulationMetrics,
     pub timeline: JobsTimeline,
+    #[serde(default)]
+    pub decisions: Vec<forgesim_core::SchedulerDecision>,
 }
 
 #[derive(Debug, Error)]
@@ -307,6 +309,7 @@ pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationRepor
     Ok(SimulationReport {
         metrics,
         timeline: JobsTimeline::from_cluster(&cluster),
+        decisions: cluster.decision_log.clone(),
     })
 }
 
@@ -341,10 +344,7 @@ pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
         ));
     }
 
-    let resource_manager = match mig_registry {
-        Some(registry) => ResourceManager::with_mig(registry),
-        None => ResourceManager::new(),
-    };
+    let resource_manager = build_resource_manager(mig_registry, &config.scheduler.r#type);
 
     Ok(RlSession::new(
         cluster,

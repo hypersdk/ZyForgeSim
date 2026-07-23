@@ -101,6 +101,31 @@ pip install -e '.[viz]'
 python python/examples/plot_run.py outputs/jobs.json
 ```
 
+### Live CLI dashboard (Phase 1 UI)
+
+Rich terminal dashboard — cluster summary, GPU utilization bars, queue list:
+
+```bash
+maturin develop
+pip install -e '.[dashboard]'
+python python/examples/live_dashboard.py --config configs/clusters/small_h100.yaml
+# or
+python -m forgesim.dashboard --config configs/clusters/small_h100.yaml
+```
+
+### Web dashboard (Phase 2 UI)
+
+FastAPI backend + Next.js frontend — run simulations, replay scheduler decisions, compare configs:
+
+```bash
+pip install -e '.[server]'
+uvicorn forgesim.server.app:app --reload --port 8080
+
+cd web && npm install && npm run dev
+```
+
+Open http://localhost:3000. See [web/README.md](web/README.md) and [docs/ui_roadmap.md](docs/ui_roadmap.md).
+
 ### Python + RL (M7)
 
 On macOS Homebrew Python, use the setup script if `venv` fails on `pyexpat`:

@@ -1,9 +1,10 @@
-use forgesim_config::{load_rl_session, run_simulation};
+use forgesim_config::{load_rl_session, run_simulation, run_simulation_report};
 use forgesim_core::rl::RlSession;
+use forgesim_core::ClusterSnapshot;
 use forgesim_metrics::SimulationMetrics;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 #[pyclass]
 #[derive(Clone)]
@@ -51,12 +52,12 @@ impl From<SimulationMetrics> for SimResult {
 impl SimResult {
     fn __repr__(&self) -> String {
         format!(
-            "SimResult(makespan={:.2}, mean_wait={:.2}, util={:.1}%, jobs={}/{})",
+            "SimResult(makespan={:.2}, util={:.1}%, jobs={}/{}, failed={})",
             self.makespan,
-            self.mean_wait_time,
             self.gpu_utilization * 100.0,
             self.jobs_completed,
-            self.jobs_total
+            self.jobs_total,
+            self.jobs_failed
         )
     }
 
@@ -123,13 +124,12 @@ impl SimSession {
 
     fn step(&mut self, py: Python<'_>, action: usize) -> PyResult<Py<PyAny>> {
         let result = self.inner.step(action);
-        let dict = PyDict::new_bound(py);
-        dict.set_item("observation", snapshot_to_py(py, &result.observation)?)?;
-        dict.set_item("reward", result.reward)?;
-        dict.set_item("done", result.done)?;
-        dict.set_item("placed", result.placed)?;
-        dict.set_item("invalid_action", result.invalid_action)?;
-        Ok(dict.into())
+        step_result_to_py(py, &result)
+    }
+
+    fn step_fifo(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let result = self.inner.step_fifo();
+        step_result_to_py(py, &result)
     }
 
     fn metrics(&self) -> SimResult {
@@ -138,17 +138,116 @@ impl SimSession {
             self.inner.jobs_total,
         ))
     }
+
+    fn decisions(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        decisions_to_py(py, self.inner.decisions())
+    }
 }
 
-fn snapshot_to_py(py: Python<'_>, snap: &forgesim_core::ClusterSnapshot) -> PyResult<Py<PyAny>> {
+fn job_snapshot_to_py(py: Python<'_>, job: &forgesim_core::JobSnapshot) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", &job.id)?;
+    dict.set_item("name", &job.name)?;
+    dict.set_item("arrival_time", job.arrival_time)?;
+    dict.set_item("runtime", job.runtime)?;
+    dict.set_item("gpu_count", job.gpu_count)?;
+    dict.set_item("priority", job.priority)?;
+    dict.set_item("tenant", &job.tenant)?;
+    dict.set_item("state", &job.state)?;
+    dict.set_item("wait_proxy", job.wait_proxy)?;
+    dict.set_item("placeable", job.placeable)?;
+    Ok(dict.into())
+}
+
+fn snapshot_to_py(py: Python<'_>, snap: &ClusterSnapshot) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("clock", snap.clock)?;
     dict.set_item("free_gpus", snap.free_gpus)?;
     dict.set_item("waiting", snap.waiting)?;
     dict.set_item("running", snap.running)?;
     dict.set_item("finished", snap.finished)?;
+    dict.set_item("node_count", snap.node_count)?;
+    dict.set_item("gpu_count", snap.gpu_count)?;
     dict.set_item("features", snap.to_feature_vector())?;
+
+    let queue_jobs = PyList::empty_bound(py);
+    for job in &snap.queue_jobs {
+        queue_jobs.append(job_snapshot_to_py(py, job)?)?;
+    }
+    dict.set_item("queue_jobs", queue_jobs)?;
+
+    let top_jobs = PyList::empty_bound(py);
+    for job in &snap.top_jobs {
+        top_jobs.append(job_snapshot_to_py(py, job)?)?;
+    }
+    dict.set_item("top_jobs", top_jobs)?;
+
+    let running_jobs = PyList::empty_bound(py);
+    for job in &snap.running_jobs {
+        let j = PyDict::new_bound(py);
+        j.set_item("id", &job.id)?;
+        j.set_item("name", &job.name)?;
+        j.set_item("gpu_count", job.gpu_count)?;
+        j.set_item("assigned_gpus", &job.assigned_gpus)?;
+        j.set_item("priority", job.priority)?;
+        j.set_item("tenant", &job.tenant)?;
+        running_jobs.append(j)?;
+    }
+    dict.set_item("running_jobs", running_jobs)?;
+
+    let nodes = PyList::empty_bound(py);
+    for node in &snap.nodes {
+        let n = PyDict::new_bound(py);
+        n.set_item("id", &node.id)?;
+        let gpus = PyList::empty_bound(py);
+        for gpu in &node.gpus {
+            let g = PyDict::new_bound(py);
+            g.set_item("id", &gpu.id)?;
+            g.set_item("node_id", &gpu.node_id)?;
+            g.set_item("busy", gpu.busy)?;
+            g.set_item("utilization", gpu.utilization)?;
+            g.set_item("job_id", &gpu.job_id)?;
+            g.set_item("job_name", &gpu.job_name)?;
+            g.set_item("nvlink_group", gpu.nvlink_group)?;
+            gpus.append(g)?;
+        }
+        n.set_item("gpus", gpus)?;
+        nodes.append(n)?;
+    }
+    dict.set_item("nodes", nodes)?;
+
     Ok(dict.into())
+}
+
+fn step_result_to_py(
+    py: Python<'_>,
+    result: &forgesim_core::StepResult,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("observation", snapshot_to_py(py, &result.observation)?)?;
+    dict.set_item("reward", result.reward)?;
+    dict.set_item("done", result.done)?;
+    dict.set_item("placed", result.placed)?;
+    dict.set_item("invalid_action", result.invalid_action)?;
+    Ok(dict.into())
+}
+
+fn decisions_to_py(
+    py: Python<'_>,
+    decisions: &[forgesim_core::SchedulerDecision],
+) -> PyResult<Py<PyAny>> {
+    let list = PyList::empty_bound(py);
+    for d in decisions {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("time", d.time)?;
+        dict.set_item("kind", &d.kind)?;
+        dict.set_item("job_id", &d.job_id)?;
+        dict.set_item("job_name", &d.job_name)?;
+        dict.set_item("gpu_ids", &d.gpu_ids)?;
+        dict.set_item("message", &d.message)?;
+        list.append(dict)?;
+    }
+    Ok(list.into())
 }
 
 #[pyfunction]
@@ -158,10 +257,22 @@ fn run_from_config(config_path: &str) -> PyResult<SimResult> {
     Ok(SimResult::from(metrics))
 }
 
+#[pyfunction]
+fn run_report_from_config(py: Python<'_>, config_path: &str) -> PyResult<Py<PyAny>> {
+    let report = run_simulation_report(std::path::Path::new(config_path))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let dict = PyDict::new_bound(py);
+    dict.set_item("metrics", SimResult::from(report.metrics))?;
+    dict.set_item("timeline", report.timeline.to_json_pretty())?;
+    dict.set_item("decisions", decisions_to_py(py, &report.decisions)?)?;
+    Ok(dict.into())
+}
+
 #[pymodule]
 fn _forgesim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SimResult>()?;
     m.add_class::<SimSession>()?;
     m.add_function(wrap_pyfunction!(run_from_config, m)?)?;
+    m.add_function(wrap_pyfunction!(run_report_from_config, m)?)?;
     Ok(())
 }

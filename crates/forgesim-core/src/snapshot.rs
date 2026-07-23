@@ -1,5 +1,5 @@
 use crate::cluster::Cluster;
-use crate::models::Job;
+use crate::models::{Job, JobState};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_OBS_TOP_K: usize = 8;
@@ -12,8 +12,37 @@ pub struct JobSnapshot {
     pub runtime: f64,
     pub gpu_count: u32,
     pub priority: u32,
+    pub tenant: Option<String>,
+    pub state: String,
     pub wait_proxy: f64,
     pub placeable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunningJobSnapshot {
+    pub id: String,
+    pub name: String,
+    pub gpu_count: u32,
+    pub assigned_gpus: Vec<String>,
+    pub priority: u32,
+    pub tenant: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuSnapshot {
+    pub id: String,
+    pub node_id: String,
+    pub busy: bool,
+    pub utilization: f64,
+    pub job_id: Option<String>,
+    pub job_name: Option<String>,
+    pub nvlink_group: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeSnapshot {
+    pub id: String,
+    pub gpus: Vec<GpuSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,11 +52,42 @@ pub struct ClusterSnapshot {
     pub waiting: u32,
     pub running: u32,
     pub finished: u32,
+    pub node_count: u32,
+    pub gpu_count: u32,
     pub top_jobs: Vec<JobSnapshot>,
+    pub queue_jobs: Vec<JobSnapshot>,
+    pub running_jobs: Vec<RunningJobSnapshot>,
+    pub nodes: Vec<NodeSnapshot>,
 }
 
 pub fn job_wait_proxy(job: &Job, clock: f64) -> f64 {
     (clock - job.arrival_time).max(0.0)
+}
+
+fn job_state_str(state: JobState) -> String {
+    match state {
+        JobState::Pending => "pending",
+        JobState::Waiting => "waiting",
+        JobState::Running => "running",
+        JobState::Finished => "finished",
+        JobState::Failed => "failed",
+    }
+    .to_string()
+}
+
+fn job_to_snapshot(job: &Job, clock: f64, placeable: bool) -> JobSnapshot {
+    JobSnapshot {
+        id: job.id.clone(),
+        name: job.name.clone(),
+        arrival_time: job.arrival_time,
+        runtime: job.runtime,
+        gpu_count: job.gpu_count,
+        priority: job.priority,
+        tenant: job.tenant.clone(),
+        state: job_state_str(job.state),
+        wait_proxy: job_wait_proxy(job, clock),
+        placeable,
+    }
 }
 
 impl ClusterSnapshot {
@@ -36,20 +96,69 @@ impl ClusterSnapshot {
         top_k: usize,
         placeable_mask: &[bool],
     ) -> Self {
-        let waiting: Vec<_> = cluster.waiting_queue.iter().collect();
-        let mut top_jobs = Vec::new();
-        for (idx, job) in waiting.iter().take(top_k).enumerate() {
-            top_jobs.push(JobSnapshot {
+        let queue_jobs: Vec<_> = cluster
+            .waiting_queue
+            .iter()
+            .enumerate()
+            .map(|(idx, job)| {
+                let placeable = placeable_mask.get(idx).copied().unwrap_or(false);
+                job_to_snapshot(job, cluster.clock, placeable)
+            })
+            .collect();
+
+        let mut top_jobs = queue_jobs.iter().take(top_k).cloned().collect();
+
+        let running_jobs: Vec<_> = cluster
+            .running_jobs
+            .values()
+            .map(|job| RunningJobSnapshot {
                 id: job.id.clone(),
                 name: job.name.clone(),
-                arrival_time: job.arrival_time,
-                runtime: job.runtime,
                 gpu_count: job.gpu_count,
+                assigned_gpus: job.assigned_gpus.clone(),
                 priority: job.priority,
-                wait_proxy: job_wait_proxy(job, cluster.clock),
-                placeable: placeable_mask.get(idx).copied().unwrap_or(false),
-            });
+                tenant: job.tenant.clone(),
+            })
+            .collect();
+
+        let mut job_by_gpu: std::collections::HashMap<String, (&str, &str)> =
+            std::collections::HashMap::new();
+        for job in cluster.running_jobs.values() {
+            for gpu_id in &job.assigned_gpus {
+                job_by_gpu.insert(gpu_id.clone(), (job.id.as_str(), job.name.as_str()));
+            }
         }
+
+        let nodes: Vec<_> = cluster
+            .nodes
+            .iter()
+            .map(|node| {
+                let gpus = node
+                    .gpus
+                    .iter()
+                    .map(|gpu| {
+                        let busy = !gpu.is_whole_gpu_free();
+                        let (job_id, job_name) = job_by_gpu
+                            .get(&gpu.id)
+                            .map(|(id, name)| (Some(id.to_string()), Some(name.to_string())))
+                            .unwrap_or((None, None));
+                        GpuSnapshot {
+                            id: gpu.id.clone(),
+                            node_id: node.id.clone(),
+                            busy,
+                            utilization: if busy { 1.0 } else { 0.0 },
+                            job_id,
+                            job_name,
+                            nvlink_group: gpu.nvlink_group,
+                        }
+                    })
+                    .collect();
+                NodeSnapshot {
+                    id: node.id.clone(),
+                    gpus,
+                }
+            })
+            .collect();
 
         Self {
             clock: cluster.clock,
@@ -57,7 +166,12 @@ impl ClusterSnapshot {
             waiting: cluster.waiting_queue.len() as u32,
             running: cluster.running_jobs.len() as u32,
             finished: cluster.finished_jobs.len() as u32,
+            node_count: cluster.nodes.len() as u32,
+            gpu_count: cluster.gpu_count() as u32,
             top_jobs,
+            queue_jobs,
+            running_jobs,
+            nodes,
         }
     }
 

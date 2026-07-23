@@ -12,5 +12,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { workspace = true }
+forgesim-core = { path = "../forgesim-core" }
 forgesim-config = { path = "../forgesim-config" }
 forgesim-metrics = { path = "../forgesim-metrics" }
