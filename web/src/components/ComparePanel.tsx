@@ -13,15 +13,15 @@ export function ComparePanel({
     <Card title="Compare Schedulers / Configs">
       <div className="grid gap-4 md:grid-cols-2">
         {results.map((r) => (
-          <div key={r.config} className="rounded border border-slate-700 p-3">
-            <div className="mb-2 font-medium text-white">{r.config}</div>
+          <div key={r.config} className="rounded-hs border border-hs-border bg-hs-bg/40 p-3">
+            <div className="mb-2 font-medium text-hs-heading">{r.config}</div>
             {r.metrics ? (
               <div className="grid grid-cols-2 gap-2">
                 <MetricTile label="Makespan" value={`${r.metrics.makespan.toFixed(1)}s`} />
                 <MetricTile label="Utilization" value={`${(r.metrics.gpu_utilization * 100).toFixed(1)}%`} />
               </div>
             ) : (
-              <div className="text-sm text-slate-400">No metrics</div>
+              <div className="text-sm text-hs-muted">No metrics</div>
             )}
           </div>
         ))}

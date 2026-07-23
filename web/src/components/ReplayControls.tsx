@@ -3,7 +3,8 @@
 import { useEffect } from "react";
 import type { ClusterSnapshot, SchedulerDecision } from "@/types/simulation";
 import { useReplayStore } from "@/store/useReplayStore";
-import { Card } from "./ui";
+import { Button, Card } from "./ui";
+import clsx from "clsx";
 
 export function ReplayControls({
   snapshots,
@@ -39,39 +40,46 @@ export function ReplayControls({
   return (
     <Card title="Scheduler Replay">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button className="rounded bg-slate-700 px-3 py-1 text-sm" onClick={() => setPlaying(!playing)}>
+        <Button variant="secondary" onClick={() => setPlaying(!playing)}>
           {playing ? "⏸ Pause" : "▶ Play"}
-        </button>
-        <button className="rounded bg-slate-700 px-3 py-1 text-sm" onClick={prev}>
+        </Button>
+        <Button variant="secondary" onClick={prev}>
           ⏮ Prev
-        </button>
-        <button className="rounded bg-slate-700 px-3 py-1 text-sm" onClick={next}>
+        </Button>
+        <Button variant="secondary" onClick={next}>
           ⏭ Next
-        </button>
+        </Button>
         {[0.5, 1, 2, 10].map((s) => (
           <button
             key={s}
-            className={`rounded px-2 py-1 text-xs ${speed === s ? "bg-blue-700" : "bg-slate-800"}`}
+            className={clsx(
+              "rounded-hs px-2 py-1 text-xs transition",
+              speed === s
+                ? "bg-hs-indigo/30 text-hs-purple-light border border-hs-indigo/40"
+                : "bg-hs-bg border border-hs-border text-hs-muted hover:border-hs-border-accent"
+            )}
             onClick={() => setSpeed(s)}
           >
             {s}×
           </button>
         ))}
-        <span className="text-xs text-slate-400">
+        <span className="font-mono text-xs text-hs-muted">
           step {index + 1} / {Math.max(snapshots.length, decisions.length, 1)}
         </span>
       </div>
       {decision ? (
-        <div className="rounded border border-slate-700 bg-slate-950/60 p-3 text-sm">
-          <div className="text-slate-400">t={decision.time.toFixed(2)}s · {decision.kind}</div>
-          <div className="mt-1 text-white">{decision.message}</div>
+        <div className="rounded-hs border border-hs-border bg-hs-surface-code/60 p-3 text-sm">
+          <div className="font-mono text-xs text-hs-muted">
+            t={decision.time.toFixed(2)}s · {decision.kind}
+          </div>
+          <div className="mt-1 text-hs-heading">{decision.message}</div>
           {decision.gpu_ids.length > 0 && (
-            <div className="mt-1 text-xs text-slate-400">GPUs: {decision.gpu_ids.join(", ")}</div>
+            <div className="mt-1 font-mono text-xs text-hs-muted">GPUs: {decision.gpu_ids.join(", ")}</div>
           )}
         </div>
       ) : null}
       {snapshot ? (
-        <div className="mt-2 text-xs text-slate-400">
+        <div className="mt-2 font-mono text-xs text-hs-muted">
           clock={snapshot.clock.toFixed(2)} · running={snapshot.running} · queued={snapshot.waiting}
         </div>
       ) : null}
