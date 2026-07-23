@@ -11,6 +11,10 @@ pub struct Cluster {
     pub finished_jobs: Vec<Job>,
     pub clock: f64,
     pub mig_reconfigs: u32,
+    pub total_preemptions: u32,
+    /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
+    /// Tenants with no entry are unrestricted.
+    pub tenant_quotas: HashMap<String, u32>,
 }
 
 impl Cluster {
@@ -22,7 +26,18 @@ impl Cluster {
             finished_jobs: Vec::new(),
             clock: 0.0,
             mig_reconfigs: 0,
+            total_preemptions: 0,
+            tenant_quotas: HashMap::new(),
         }
+    }
+
+    /// GPUs currently held by `tenant` across its running jobs.
+    pub fn tenant_gpu_usage(&self, tenant: &str) -> u32 {
+        self.running_jobs
+            .values()
+            .filter(|j| j.tenant.as_deref() == Some(tenant))
+            .map(|j| j.gpu_count)
+            .sum()
     }
 
     pub fn all_gpus(&self) -> impl Iterator<Item = &Gpu> {
@@ -66,6 +81,27 @@ impl Cluster {
         job.finish_time = Some(finish_time);
         self.finished_jobs.push(job.clone());
         Some(job)
+    }
+
+    /// Remove a running job and free its GPUs, without finishing it.
+    /// Returns the job exactly as it was running (unmodified) so the
+    /// caller can either restore it via `resume_evicted_job` (if freeing
+    /// it didn't actually help) or requeue it via
+    /// `Job::requeue_after_preemption`.
+    pub fn evict_job(&mut self, job_id: &str) -> Option<Job> {
+        let job = self.running_jobs.remove(job_id)?;
+        for resource_id in &job.assigned_gpus {
+            self.mark_resource_free(resource_id);
+        }
+        Some(job)
+    }
+
+    /// Undo `evict_job`: put a job back exactly as it was running.
+    pub fn resume_evicted_job(&mut self, job: Job) {
+        for resource_id in &job.assigned_gpus {
+            self.mark_resource_busy(resource_id, &job.id);
+        }
+        self.running_jobs.insert(job.id.clone(), job);
     }
 
     pub fn mark_resource_busy(&mut self, resource_id: &str, job_id: &str) {
@@ -127,8 +163,22 @@ impl Cluster {
     }
 
     pub fn sort_waiting_by_arrival(&mut self) {
-        self.waiting_queue
-            .sort_by(|a, b| a.arrival_time.partial_cmp(&b.arrival_time).unwrap_or(Ordering::Equal));
+        self.waiting_queue.sort_by(|a, b| {
+            a.arrival_time
+                .partial_cmp(&b.arrival_time)
+                .unwrap_or(Ordering::Equal)
+        });
+    }
+
+    /// Higher `priority` first; ties broken by earlier `arrival_time`.
+    pub fn sort_waiting_by_priority(&mut self) {
+        self.waiting_queue.sort_by(|a, b| {
+            b.priority.cmp(&a.priority).then_with(|| {
+                a.arrival_time
+                    .partial_cmp(&b.arrival_time)
+                    .unwrap_or(Ordering::Equal)
+            })
+        });
     }
 }
 
@@ -168,6 +218,84 @@ mod tests {
     }
 
     #[test]
+    fn sort_waiting_by_priority_orders_high_priority_first() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut low = Job::new("j1", "low", 0.0, 10.0, 1);
+        low.priority = 10;
+        let mut high = Job::new("j2", "high", 5.0, 10.0, 1);
+        high.priority = 90;
+        cluster.enqueue_job(low);
+        cluster.enqueue_job(high);
+
+        cluster.sort_waiting_by_priority();
+
+        assert_eq!(cluster.waiting_queue[0].id, "j2");
+        assert_eq!(cluster.waiting_queue[1].id, "j1");
+    }
+
+    #[test]
+    fn sort_waiting_by_priority_breaks_ties_by_arrival() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut later = Job::new("j1", "later", 5.0, 10.0, 1);
+        later.priority = 50;
+        let mut earlier = Job::new("j2", "earlier", 0.0, 10.0, 1);
+        earlier.priority = 50;
+        cluster.enqueue_job(later);
+        cluster.enqueue_job(earlier);
+
+        cluster.sort_waiting_by_priority();
+
+        assert_eq!(cluster.waiting_queue[0].id, "j2");
+        assert_eq!(cluster.waiting_queue[1].id, "j1");
+    }
+
+    #[test]
+    fn tenant_gpu_usage_sums_running_jobs_for_tenant() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut a = Job::new("j1", "a", 0.0, 10.0, 1);
+        a.tenant = Some("acme".into());
+        let mut b = Job::new("j2", "b", 0.0, 10.0, 1);
+        b.tenant = Some("other".into());
+        cluster.start_job(a, &["gpu-0".into()], 0.0);
+        cluster.start_job(b, &["gpu-1".into()], 0.0);
+
+        assert_eq!(cluster.tenant_gpu_usage("acme"), 1);
+        assert_eq!(cluster.tenant_gpu_usage("other"), 1);
+        assert_eq!(cluster.tenant_gpu_usage("nobody"), 0);
+    }
+
+    #[test]
+    fn evict_job_frees_gpus_without_finishing() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
+        cluster.start_job(job, &["gpu-0".into()], 0.0);
+        assert_eq!(cluster.free_gpu_count(), 1);
+
+        let evicted = cluster.evict_job("j1").expect("job was running");
+        assert_eq!(evicted.id, "j1");
+        assert_eq!(cluster.free_gpu_count(), 2);
+        assert!(!cluster.running_jobs.contains_key("j1"));
+        assert!(cluster.finished_jobs.is_empty());
+    }
+
+    #[test]
+    fn resume_evicted_job_restores_running_state() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
+        cluster.start_job(job, &["gpu-0".into()], 0.0);
+
+        let evicted = cluster.evict_job("j1").unwrap();
+        cluster.resume_evicted_job(evicted);
+
+        assert_eq!(cluster.free_gpu_count(), 1);
+        assert!(cluster.running_jobs.contains_key("j1"));
+        assert_eq!(
+            cluster.gpu("gpu-0").unwrap().running_job_id.as_deref(),
+            Some("j1")
+        );
+    }
+
+    #[test]
     fn finish_job_frees_gpus() {
         let mut cluster = Cluster::new(vec![sample_node()]);
         let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
@@ -193,8 +321,16 @@ mod tests {
         }]);
         let job = Job::new("j1", "job-1", 0.0, 10.0, 1);
         cluster.start_job(job, &["gpu-0-mig-0".into()], 0.0);
-        assert!(cluster.slice("gpu-0-mig-0").unwrap().running_job_id.is_some());
+        assert!(cluster
+            .slice("gpu-0-mig-0")
+            .unwrap()
+            .running_job_id
+            .is_some());
         cluster.finish_job("j1", 10.0);
-        assert!(cluster.slice("gpu-0-mig-0").unwrap().running_job_id.is_none());
+        assert!(cluster
+            .slice("gpu-0-mig-0")
+            .unwrap()
+            .running_job_id
+            .is_none());
     }
 }

@@ -6,23 +6,25 @@ pub use forge_bundle::{
     load_forge_bundle, load_gpu_type_registry, load_model_profiles, parse_fabric_ai_job,
     run_forge_bundle, ForgeBundle, GpuTypeRegistry, ModelProfile,
 };
-pub use mig::{load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster};
-pub use trace::{
-    compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
-    oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
-    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement, TraceDiffReport,
-    TraceEvent, TraceReplayResult,
+pub use mig::{
+    load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+pub use trace::{
+    compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
+    oracle_placements_from_trace, parse_trace_line, run_trace_file, run_trace_replay,
+    trace_diff_to_json, GpuRef, OraclePlacement, PlacementDiff, SimulatedPlacement,
+    TraceDiffReport, TraceEvent, TraceReplayResult,
+};
 
 use forgesim_core::cluster::Cluster;
-use forgesim_core::engine::SimulationEngine;
+use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::FifoScheduler;
+use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -71,6 +73,8 @@ pub struct NodeSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClusterConfig {
     pub nodes: Vec<NodeSpec>,
+    #[serde(default)]
+    pub tenant_quotas: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,10 +193,7 @@ pub fn build_cluster(
         let mut gpus = Vec::new();
         for gpu_spec in &node_spec.gpus {
             let profile = profiles.get(&gpu_spec.profile).ok_or_else(|| {
-                ConfigError::Invalid(format!(
-                    "unknown hardware profile '{}'",
-                    gpu_spec.profile
-                ))
+                ConfigError::Invalid(format!("unknown hardware profile '{}'", gpu_spec.profile))
             })?;
             let mut gpu = Gpu::new(
                 gpu_spec.id.clone(),
@@ -209,7 +210,9 @@ pub fn build_cluster(
             gpus,
         });
     }
-    Ok(Cluster::new(nodes))
+    let mut cluster = Cluster::new(nodes);
+    cluster.tenant_quotas = cluster_cfg.tenant_quotas.clone();
+    Ok(cluster)
 }
 
 pub fn resolve_path(base: &Path, relative: &str) -> PathBuf {
@@ -258,8 +261,22 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         None => ResourceManager::new(),
     };
 
-    let mut engine = match config.scheduler.r#type.as_str() {
-        "fifo" => SimulationEngine::with_resource_manager(cluster, FifoScheduler, resource_manager),
+    let metrics = match config.scheduler.r#type.as_str() {
+        "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
+        "priority" => run_to_completion(
+            cluster,
+            PriorityScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
+        "preemptive" => run_to_completion(
+            cluster,
+            PreemptivePriorityScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
         other => {
             return Err(ConfigError::Invalid(format!(
                 "unsupported scheduler type '{other}'"
@@ -267,10 +284,20 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         }
     };
 
+    Ok(metrics)
+}
+
+fn run_to_completion<S: Scheduler>(
+    cluster: Cluster,
+    scheduler: S,
+    resource_manager: ResourceManager,
+    jobs: Vec<Job>,
+    jobs_total: usize,
+) -> SimulationMetrics {
+    let mut engine = SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager);
     engine.submit_jobs(jobs);
     engine.run();
-
-    Ok(SimulationMetrics::from_cluster(&engine.cluster, jobs_total))
+    SimulationMetrics::from_cluster(&engine.cluster, jobs_total)
 }
 
 #[cfg(test)]
@@ -301,13 +328,16 @@ mod tests {
 
     #[test]
     fn load_workload_with_mig_fields() {
-        let workload = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/workloads/mig_m4.yaml");
+        let workload =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/workloads/mig_m4.yaml");
         if !workload.exists() {
             return;
         }
         let jobs = load_workload(&workload).unwrap();
-        let mig = jobs.iter().find(|j| j.id == "mig-infer-a").expect("mig job");
+        let mig = jobs
+            .iter()
+            .find(|j| j.id == "mig-infer-a")
+            .expect("mig job");
         assert_eq!(mig.mig_profile.as_deref(), Some("1g.10gb"));
         assert_eq!(mig.mig_count, Some(2));
         assert!(mig.is_mig_job());

@@ -95,6 +95,43 @@ spec:
 
 **GPU count rule:** When `spec.distributed.enabled` is true, total GPUs = `nodes × gpusPerNode` (gang example: 4×8 = **32**, not `spec.gpus` alone).
 
+## Tenant GPU quotas (M6)
+
+`FabricQuota.spec.gpuQuota.maxGPUs` is enforced at placement time: a job
+whose tenant already holds `maxGPUs` GPUs across running jobs stays queued
+until one of that tenant's jobs finishes and frees capacity. Tenants with
+no matching `FabricQuota` (or no `gpuQuota.maxGPUs`) are unrestricted. This
+only serializes jobs *within* a tenant — it never blocks or reorders other
+tenants' jobs. Internal YAML configs can set the same limits directly via
+`cluster.tenant_quotas: { <tenant>: <maxGPUs> }`.
+
+## Priority scheduling (M6)
+
+`spec.priority` (0–100, mapped to `Job.priority`) can drive placement order
+instead of arrival time: pass `--scheduler priority` to `forge-sim run
+--forge-bundle` or `forge-sim replay`, or set `scheduler.type: priority` in
+an internal YAML config. The priority scheduler orders the waiting queue by
+highest priority first, breaking ties by earliest arrival — but it does not
+preempt jobs already running, so a low-priority job that started before a
+high-priority one arrived keeps running to completion.
+
+## Preemption (M6)
+
+`--scheduler preemptive` / `scheduler.type: preemptive` extends priority
+scheduling with eviction: a waiting job that doesn't currently fit may
+preempt running jobs with strictly lower priority (lowest priority evicted
+first), stopping as soon as enough capacity is freed — or leaving the
+cluster untouched if evicting every eligible candidate still isn't enough.
+
+Evicted jobs resume later with whatever runtime they had left — no restart
+penalty, as if perfectly checkpointed — and re-enter the queue at their
+*original* priority and arrival time. A job that's been preempted 3 times
+becomes exempt from further eviction, so a persistently low-priority job
+still eventually finishes rather than being evicted forever. Only
+whole-GPU jobs trigger eviction; a MIG job that doesn't fit is left
+waiting. `SimulationMetrics.preemptions` counts how many evictions
+happened (`forge-sim run` prints a `preemptions:` line when nonzero).
+
 ## Calibrated profiles
 
 Runtime and memory are **not** in Forge CRDs. They come from [`configs/profiles/`](../configs/profiles/):

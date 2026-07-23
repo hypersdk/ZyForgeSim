@@ -1,7 +1,7 @@
 use forgesim_config::run_simulation;
 use forgesim_metrics::SimulationMetrics;
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 
 #[pyclass]
 #[derive(Clone)]
@@ -16,6 +16,10 @@ struct SimResult {
     jobs_completed: usize,
     #[pyo3(get)]
     jobs_total: usize,
+    #[pyo3(get)]
+    mig_reconfigs: u32,
+    #[pyo3(get)]
+    preemptions: u32,
 }
 
 impl From<SimulationMetrics> for SimResult {
@@ -26,6 +30,8 @@ impl From<SimulationMetrics> for SimResult {
             gpu_utilization: m.gpu_utilization,
             jobs_completed: m.jobs_completed,
             jobs_total: m.jobs_total,
+            mig_reconfigs: m.mig_reconfigs,
+            preemptions: m.preemptions,
         }
     }
 }
@@ -51,6 +57,8 @@ impl SimResult {
             jobs_completed: self.jobs_completed,
             jobs_total: self.jobs_total,
             queue_max_length: 0,
+            mig_reconfigs: self.mig_reconfigs,
+            preemptions: self.preemptions,
         };
         m.to_json_pretty()
     }

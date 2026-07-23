@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use forgesim_config::{
-    load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file,
-    trace_diff_to_json, TraceDiffReport,
+    load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file, trace_diff_to_json,
+    TraceDiffReport,
 };
 
 fn repo_root() -> PathBuf {
@@ -25,6 +25,60 @@ fn integration_synthetic_m1_workload_completes() {
 }
 
 #[test]
+fn integration_priority_scheduler_prefers_high_priority_job() {
+    let fifo_config = repo_root().join("configs/clusters/priority_fifo.yaml");
+    let priority_config = repo_root().join("configs/clusters/priority_scheduler.yaml");
+    if !fifo_config.exists() || !priority_config.exists() {
+        return;
+    }
+    // Same workload (a filler job occupies the only GPU while a low- and a
+    // high-priority job both arrive and queue up behind it), run under each
+    // scheduler policy. Total work done is identical either way, so
+    // makespan doesn't distinguish them — but mean_wait_time does: the
+    // priority scheduler runs the high-priority job first once the GPU
+    // frees up, so on average jobs wait less than under strict FIFO, which
+    // runs the earlier-arriving low-priority job first.
+    let fifo_metrics = run_simulation(&fifo_config).expect("fifo simulation");
+    let priority_metrics = run_simulation(&priority_config).expect("priority simulation");
+
+    assert_eq!(fifo_metrics.jobs_completed, fifo_metrics.jobs_total);
+    assert_eq!(priority_metrics.jobs_completed, priority_metrics.jobs_total);
+    assert_eq!(fifo_metrics.makespan, priority_metrics.makespan);
+    assert!(priority_metrics.mean_wait_time < fifo_metrics.mean_wait_time);
+}
+
+#[test]
+fn integration_preemptive_scheduler_evicts_for_higher_priority_arrival() {
+    let priority_config = repo_root().join("configs/clusters/preemption_priority.yaml");
+    let preemptive_config = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !priority_config.exists() || !preemptive_config.exists() {
+        return;
+    }
+    // job-low starts immediately at t=0 (the GPU is free) and is still
+    // running when job-high (much higher priority) arrives at t=10 — a
+    // case non-preemptive priority ordering can't help with, since
+    // job-high simply wasn't in the waiting queue yet when job-low was
+    // placed. The preemptive scheduler evicts job-low, runs job-high right
+    // away, then resumes job-low with its remaining runtime. Same total
+    // GPU-seconds of work either way (single GPU serializes everything),
+    // so makespan matches, but the preemptive run gets job-high started
+    // immediately instead of after job-low's full 100s runtime.
+    let priority_metrics = run_simulation(&priority_config).expect("priority simulation");
+    let preemptive_metrics = run_simulation(&preemptive_config).expect("preemptive simulation");
+
+    assert_eq!(priority_metrics.jobs_completed, priority_metrics.jobs_total);
+    assert_eq!(
+        preemptive_metrics.jobs_completed,
+        preemptive_metrics.jobs_total
+    );
+    assert_eq!(priority_metrics.makespan, preemptive_metrics.makespan);
+
+    assert_eq!(priority_metrics.preemptions, 0);
+    assert_eq!(preemptive_metrics.preemptions, 1);
+    assert!(preemptive_metrics.mean_wait_time < priority_metrics.mean_wait_time);
+}
+
+#[test]
 fn integration_forge_bundle_fifo_simulation() {
     let bundle = repo_root().join("tests/fixtures/forge");
     if !bundle.exists() {
@@ -36,6 +90,7 @@ fn integration_forge_bundle_fifo_simulation() {
         &repo_root().join("configs/gpu_type_registry.yaml"),
         &repo_root().join("configs/hardware"),
         &repo_root().join("configs/mig"),
+        "fifo",
     )
     .expect("forge bundle simulation");
     assert_eq!(metrics.jobs_completed, metrics.jobs_total);
@@ -75,14 +130,39 @@ fn integration_forge_bundle_gang_and_mig_fields() {
 }
 
 #[test]
+fn integration_forge_bundle_quota_delays_second_job() {
+    let bundle = repo_root().join("tests/fixtures/forge_quota");
+    if !bundle.exists() {
+        return;
+    }
+    // Cluster has 4 GPUs and both 2-GPU jobs could run concurrently, but
+    // the tenant's FabricQuota caps it at 2 GPUs — job B must wait for
+    // job A to finish and free the quota before it can start.
+    let metrics = run_forge_bundle(
+        &bundle,
+        &repo_root().join("configs/profiles"),
+        &repo_root().join("configs/gpu_type_registry.yaml"),
+        &repo_root().join("configs/hardware"),
+        &repo_root().join("configs/mig"),
+        "fifo",
+    )
+    .expect("forge bundle simulation");
+    assert_eq!(metrics.jobs_completed, 2);
+    // Without quota enforcement both jobs run in parallel and makespan
+    // equals one job's runtime (604800s); quota enforcement serializes
+    // them, doubling it.
+    assert_eq!(metrics.makespan, 1_209_600.0);
+    assert!(metrics.mean_wait_time > 0.0);
+}
+
+#[test]
 fn integration_trace_replay_matches_fifo_oracle() {
     let trace = repo_root().join("tests/fixtures/traces/fifo_match.jsonl");
     let cluster_config = repo_root().join("configs/clusters/single_gpu.yaml");
     if !trace.exists() || !cluster_config.exists() {
         return;
     }
-    let cluster =
-        forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
+    let cluster = forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
     let result = run_trace_file(&trace, cluster, "fifo").expect("trace replay");
     assert_eq!(result.report.differing_placements, 0);
     assert_eq!(result.report.matching_placements, 2);
@@ -95,8 +175,7 @@ fn integration_trace_diff_report_serializes() {
     if !trace.exists() || !cluster_config.exists() {
         return;
     }
-    let cluster =
-        forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
+    let cluster = forgesim_config::load_cluster_from_config(&cluster_config).expect("load cluster");
     let result = run_trace_file(&trace, cluster, "fifo").expect("trace replay");
     let json = trace_diff_to_json(&result.report);
     assert!(json.contains("\"matching_placements\": 2"));

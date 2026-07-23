@@ -49,6 +49,7 @@ impl<S: Scheduler> SimulationEngine<S> {
                 time: job.arrival_time,
                 kind: EventKind::JobArrival,
                 job_id: job.id.clone(),
+                run_generation: 0,
             });
             self.pending_arrivals.push(job);
         }
@@ -59,7 +60,7 @@ impl<S: Scheduler> SimulationEngine<S> {
             self.cluster.clock = event.time;
             match event.kind {
                 EventKind::JobArrival => self.handle_arrival(&event.job_id),
-                EventKind::JobComplete => self.handle_complete(&event.job_id),
+                EventKind::JobComplete => self.handle_complete(&event.job_id, event.run_generation),
             }
         }
     }
@@ -76,7 +77,14 @@ impl<S: Scheduler> SimulationEngine<S> {
         self.try_schedule();
     }
 
-    fn handle_complete(&mut self, job_id: &str) {
+    fn handle_complete(&mut self, job_id: &str, run_generation: u32) {
+        // A job preempted and restarted since this event was scheduled has
+        // moved on to a later generation — this event is stale, ignore it
+        // rather than finishing a run that isn't the current one.
+        match self.cluster.running_jobs.get(job_id) {
+            Some(job) if job.run_generation == run_generation => {}
+            _ => return,
+        }
         self.cluster.finish_job(job_id, self.cluster.clock);
         self.try_schedule();
     }
@@ -86,13 +94,17 @@ impl<S: Scheduler> SimulationEngine<S> {
             .scheduler
             .schedule(&mut self.cluster, &self.resource_manager);
         for placement in placements {
-            if let Some(job) = self.take_waiting_job(&placement.job_id) {
+            if let Some(mut job) = self.take_waiting_job(&placement.job_id) {
+                job.run_generation += 1;
+                let duration = job.duration_remaining();
+                let run_generation = job.run_generation;
                 self.cluster
                     .start_job(job.clone(), &placement.gpu_ids, placement.start_time);
                 self.event_queue.push(Event {
-                    time: placement.start_time + job.runtime,
+                    time: placement.start_time + duration,
                     kind: EventKind::JobComplete,
                     job_id: job.id,
+                    run_generation,
                 });
             }
         }
@@ -116,11 +128,7 @@ mod tests {
     struct TestScheduler;
 
     impl Scheduler for TestScheduler {
-        fn schedule(
-            &mut self,
-            cluster: &mut Cluster,
-            rm: &ResourceManager,
-        ) -> Vec<Placement> {
+        fn schedule(&mut self, cluster: &mut Cluster, rm: &ResourceManager) -> Vec<Placement> {
             cluster.sort_waiting_by_arrival();
             let mut placements = Vec::new();
             let waiting: Vec<_> = cluster.waiting_queue.iter().cloned().collect();
@@ -151,5 +159,95 @@ mod tests {
         ]);
         engine.run();
         assert_eq!(engine.cluster.finished_jobs.len(), 2);
+    }
+
+    /// Evicts "low" to make room for "high" whenever "high" doesn't
+    /// otherwise fit — a minimal stand-in for a preempting scheduler, used
+    /// to exercise the engine's stale-JobComplete handling directly.
+    struct PreemptingTestScheduler;
+
+    impl Scheduler for PreemptingTestScheduler {
+        fn schedule(&mut self, cluster: &mut Cluster, rm: &ResourceManager) -> Vec<Placement> {
+            cluster.sort_waiting_by_arrival();
+            let waiting = cluster.waiting_queue.to_vec();
+            let mut placements = Vec::new();
+
+            for job in waiting {
+                if place(cluster, rm, &job, &mut placements) {
+                    continue;
+                }
+                if job.id != "high" {
+                    continue;
+                }
+                let Some(victim) = cluster.evict_job("low") else {
+                    continue;
+                };
+                if place(cluster, rm, &job, &mut placements) {
+                    let mut victim = victim;
+                    victim.requeue_after_preemption(cluster.clock);
+                    cluster.waiting_queue.push(victim);
+                } else {
+                    cluster.resume_evicted_job(victim);
+                }
+            }
+
+            for placement in &placements {
+                for resource_id in &placement.gpu_ids {
+                    cluster.mark_resource_free(resource_id);
+                }
+            }
+            placements
+        }
+    }
+
+    fn place(
+        cluster: &mut Cluster,
+        rm: &ResourceManager,
+        job: &Job,
+        placements: &mut Vec<Placement>,
+    ) -> bool {
+        if !rm.can_place(cluster, job) {
+            return false;
+        }
+        let Ok(placement) = rm.allocate(cluster, job, cluster.clock) else {
+            return false;
+        };
+        for resource_id in &placement.gpu_ids {
+            cluster.mark_resource_busy(resource_id, &job.id);
+        }
+        placements.push(placement);
+        true
+    }
+
+    #[test]
+    fn stale_job_complete_from_before_a_preemption_does_not_finish_the_resumed_run() {
+        let mut engine = SimulationEngine::new(cluster(), PreemptingTestScheduler);
+        // "low" starts at t=0 for 100s (JobComplete scheduled for t=100).
+        // "high" arrives at t=5, evicts "low" (which has run 5s, 95s
+        // left), and runs for 20s (finishes at t=25). At t=25, "low"
+        // resumes for its remaining 95s (finishes at t=120). The stale
+        // JobComplete(low) event from t=100 must not fire early.
+        engine.submit_jobs(vec![
+            Job::new("low", "low", 0.0, 100.0, 1),
+            Job::new("high", "high", 5.0, 20.0, 1),
+        ]);
+        engine.run();
+
+        assert_eq!(engine.cluster.finished_jobs.len(), 2);
+        let low = engine
+            .cluster
+            .finished_jobs
+            .iter()
+            .find(|j| j.id == "low")
+            .expect("low finished");
+        assert_eq!(low.finish_time, Some(120.0));
+        assert_eq!(low.preemption_count, 1);
+        let high = engine
+            .cluster
+            .finished_jobs
+            .iter()
+            .find(|j| j.id == "high")
+            .expect("high finished");
+        assert_eq!(high.finish_time, Some(25.0));
     }
 }

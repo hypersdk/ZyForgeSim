@@ -94,6 +94,76 @@ fn cli_replay_trace_reports_zero_diffs() {
 }
 
 #[test]
+fn cli_run_forge_bundle_with_priority_scheduler_completes() {
+    let bundle = repo_root().join("tests/fixtures/forge");
+    if !bundle.exists() {
+        return;
+    }
+    let output = forge_sim()
+        .args([
+            "run",
+            "--forge-bundle",
+            bundle.to_str().expect("utf8 path"),
+            "--profiles-dir",
+            "configs/profiles",
+            "--scheduler",
+            "priority",
+        ])
+        .output()
+        .expect("spawn forge-sim");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("jobs completed"));
+}
+
+#[test]
+fn cli_run_internal_config_with_preemptive_scheduler_reports_preemptions() {
+    let config = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !config.exists() {
+        return;
+    }
+    let output = forge_sim()
+        .args(["run", "--config", config.to_str().expect("utf8 path")])
+        .output()
+        .expect("spawn forge-sim");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("jobs completed"));
+    assert!(stdout.contains("preemptions:"));
+}
+
+#[test]
+fn cli_run_forge_bundle_with_unknown_scheduler_fails() {
+    let bundle = repo_root().join("tests/fixtures/forge");
+    if !bundle.exists() {
+        return;
+    }
+    let output = forge_sim()
+        .args([
+            "run",
+            "--forge-bundle",
+            bundle.to_str().expect("utf8 path"),
+            "--profiles-dir",
+            "configs/profiles",
+            "--scheduler",
+            "not-a-real-scheduler",
+        ])
+        .output()
+        .expect("spawn forge-sim");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not-a-real-scheduler"));
+}
+
+#[test]
 fn cli_run_mig_config_reports_reconfigs() {
     let config = repo_root().join("configs/clusters/mig_single.yaml");
     if !config.exists() {
@@ -114,10 +184,7 @@ fn cli_run_mig_config_reports_reconfigs() {
 
 #[test]
 fn cli_run_requires_config_or_bundle() {
-    let output = forge_sim()
-        .args(["run"])
-        .output()
-        .expect("spawn forge-sim");
+    let output = forge_sim().args(["run"]).output().expect("spawn forge-sim");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--config") || stderr.contains("--forge-bundle"));

@@ -5,11 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use forgesim_core::cluster::Cluster;
-use forgesim_core::engine::SimulationEngine;
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::FifoScheduler;
+use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use serde_yaml::Value;
 
@@ -82,9 +81,21 @@ fn yaml_documents(content: &str) -> ConfigResult<Vec<Value>> {
             continue;
         }
         let doc: Value = serde_yaml::from_str(trimmed)?;
-        if !doc.is_null() {
-            docs.push(doc);
+        if doc.is_null() {
+            continue;
         }
+        // `kubectl get <resource> -A -o yaml` wraps multiple resources in a
+        // single `kind: List` document with an `items:` array, rather than
+        // `---`-separating them — exactly the export command documented in
+        // docs/forge_input.md. Unwrap it so downstream kind/apiVersion
+        // checks see the actual FabricAIJob/FabricGpuNode/FabricQuota docs.
+        if kind_of(&doc) == Some("List") {
+            if let Some(items) = doc.get("items").and_then(|i| i.as_sequence()) {
+                docs.extend(items.iter().cloned());
+            }
+            continue;
+        }
+        docs.push(doc);
     }
     Ok(docs)
 }
@@ -140,6 +151,29 @@ fn parse_fabric_quotas(dir: &Path) -> ConfigResult<Vec<Value>> {
     Ok(quotas)
 }
 
+fn parse_tenant_quotas(quotas: &[Value]) -> HashMap<String, u32> {
+    let mut result = HashMap::new();
+    for quota in quotas {
+        let Some(team) = quota
+            .get("spec")
+            .and_then(|s| s.get("team"))
+            .and_then(|t| t.as_str())
+        else {
+            continue;
+        };
+        let Some(max_gpus) = quota
+            .get("spec")
+            .and_then(|s| s.get("gpuQuota"))
+            .and_then(|q| q.get("maxGPUs"))
+            .and_then(|m| m.as_i64())
+        else {
+            continue;
+        };
+        result.insert(team.to_string(), max_gpus as u32);
+    }
+    result
+}
+
 fn resolve_tenant(namespace: &str, quotas: &[Value]) -> Option<String> {
     for quota in quotas {
         let spec = quota.get("spec")?;
@@ -174,9 +208,7 @@ fn gpu_count_from_spec(spec: &Value) -> u32 {
             .unwrap_or(1) as u32;
         nodes * gpn
     } else {
-        spec.get("gpus")
-            .and_then(|g| g.as_i64())
-            .unwrap_or(1) as u32
+        spec.get("gpus").and_then(|g| g.as_i64()).unwrap_or(1) as u32
     }
 }
 
@@ -216,10 +248,17 @@ pub fn parse_fabric_ai_job(
         return Err(ConfigError::Invalid("expected FabricAIJob".into()));
     }
 
-    let meta = doc.get("metadata").ok_or_else(|| ConfigError::Invalid("missing metadata".into()))?;
-    let spec = doc.get("spec").ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
+    let meta = doc
+        .get("metadata")
+        .ok_or_else(|| ConfigError::Invalid("missing metadata".into()))?;
+    let spec = doc
+        .get("spec")
+        .ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
 
-    let name = meta.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+    let name = meta
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("unknown");
     let namespace = meta
         .get("namespace")
         .and_then(|n| n.as_str())
@@ -228,12 +267,12 @@ pub fn parse_fabric_ai_job(
 
     let annotations = meta.get("annotations").and_then(|a| a.as_mapping());
     let gang_enabled = annotations
-        .and_then(|a| a.get(&Value::from("forge.ai/gang-schedule")))
+        .and_then(|a| a.get(Value::from("forge.ai/gang-schedule")))
         .and_then(|v| v.as_str())
         .map(|s| s == "true")
         .unwrap_or(false);
     let gang_size_nodes = annotations
-        .and_then(|a| a.get(&Value::from("forge.ai/gang-size")))
+        .and_then(|a| a.get(Value::from("forge.ai/gang-size")))
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok());
 
@@ -266,10 +305,7 @@ pub fn parse_fabric_ai_job(
         _ => None,
     };
 
-    let priority = spec
-        .get("priority")
-        .and_then(|p| p.as_i64())
-        .unwrap_or(0) as u32;
+    let priority = spec.get("priority").and_then(|p| p.as_i64()).unwrap_or(0) as u32;
 
     let gpu_count = if mig_profile.is_some() {
         mig_count.unwrap_or(1)
@@ -310,7 +346,9 @@ pub fn parse_fabric_gpu_nodes(
                 continue;
             }
             validate_forge_doc(&doc)?;
-            let spec = doc.get("spec").ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
+            let spec = doc
+                .get("spec")
+                .ok_or_else(|| ConfigError::Invalid("missing spec".into()))?;
             let node_name = spec
                 .get("nodeName")
                 .and_then(|n| n.as_str())
@@ -319,10 +357,7 @@ pub fn parse_fabric_gpu_nodes(
                 .get("gpuType")
                 .and_then(|g| g.as_str())
                 .unwrap_or("any");
-            let gpu_count = spec
-                .get("gpuCount")
-                .and_then(|g| g.as_i64())
-                .unwrap_or(1) as u32;
+            let gpu_count = spec.get("gpuCount").and_then(|g| g.as_i64()).unwrap_or(1) as u32;
             let memory_gb = spec
                 .get("memoryGB")
                 .and_then(|m| m.as_i64())
@@ -394,10 +429,13 @@ pub fn load_forge_bundle(
     }
 
     if jobs.is_empty() {
-        return Err(ConfigError::Invalid("no FabricAIJob documents in jobs/".into()));
+        return Err(ConfigError::Invalid(
+            "no FabricAIJob documents in jobs/".into(),
+        ));
     }
 
-    let cluster = parse_fabric_gpu_nodes(&cluster_dir, &gpu_registry, &hw_profiles)?;
+    let mut cluster = parse_fabric_gpu_nodes(&cluster_dir, &gpu_registry, &hw_profiles)?;
+    cluster.tenant_quotas = parse_tenant_quotas(&quotas);
 
     Ok(ForgeBundle { jobs, cluster })
 }
@@ -408,6 +446,7 @@ pub fn run_forge_bundle(
     gpu_registry_path: &Path,
     hardware_profiles_dir: &Path,
     mig_profiles_dir: &Path,
+    scheduler: &str,
 ) -> ConfigResult<SimulationMetrics> {
     let bundle = load_forge_bundle(
         bundle_dir,
@@ -437,11 +476,35 @@ pub fn run_forge_bundle(
         Some(registry) => ResourceManager::with_mig(registry),
         None => ResourceManager::new(),
     };
-    let mut engine =
-        SimulationEngine::with_resource_manager(bundle.cluster, FifoScheduler, resource_manager);
-    engine.submit_jobs(bundle.jobs);
-    engine.run();
-    Ok(SimulationMetrics::from_cluster(&engine.cluster, jobs_total))
+    let metrics = match scheduler {
+        "fifo" => crate::run_to_completion(
+            bundle.cluster,
+            FifoScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        "priority" => crate::run_to_completion(
+            bundle.cluster,
+            PriorityScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        "preemptive" => crate::run_to_completion(
+            bundle.cluster,
+            PreemptivePriorityScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "unsupported scheduler type '{other}'"
+            )));
+        }
+    };
+    Ok(metrics)
 }
 
 #[cfg(test)]
@@ -471,14 +534,72 @@ mod tests {
     }
 
     #[test]
+    fn yaml_documents_unwraps_kubectl_list_output() {
+        // `kubectl get fabricaijobs -A -o yaml` (the exact command
+        // docs/forge_input.md tells users to run) wraps every matching
+        // resource in a single `kind: List` document instead of
+        // `---`-separating them.
+        let content = r#"
+apiVersion: v1
+items:
+- apiVersion: forge.ai/v1
+  kind: FabricAIJob
+  metadata:
+    name: job-a
+    namespace: default
+  spec:
+    model: llama-7b
+    gpus: 4
+    gpuType: A100
+- apiVersion: forge.ai/v1
+  kind: FabricAIJob
+  metadata:
+    name: job-b
+    namespace: default
+  spec:
+    model: gpt-13b
+    gpus: 2
+    gpuType: H100
+kind: List
+metadata:
+  resourceVersion: ""
+"#;
+        let docs = yaml_documents(content).expect("parse kubectl List output");
+        assert_eq!(docs.len(), 2);
+        assert_eq!(kind_of(&docs[0]), Some("FabricAIJob"));
+        assert_eq!(
+            docs[0]
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str()),
+            Some("job-a")
+        );
+        assert_eq!(api_version_of(&docs[1]), Some("forge.ai/v1"));
+    }
+
+    #[test]
+    fn yaml_documents_still_handles_dash_separated_docs() {
+        let content = "apiVersion: forge.ai/v1\nkind: FabricAIJob\nmetadata:\n  name: a\n---\napiVersion: forge.ai/v1\nkind: FabricAIJob\nmetadata:\n  name: b\n";
+        let docs = yaml_documents(content).expect("parse multi-doc yaml");
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn yaml_documents_empty_list_yields_no_docs() {
+        let content = "apiVersion: v1\nitems: []\nkind: List\n";
+        let docs = yaml_documents(content).expect("parse empty list");
+        assert!(docs.is_empty());
+    }
+
+    #[test]
     fn loads_fixture_forge_bundle() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/forge");
         if !root.exists() {
             return;
         }
         let profiles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/profiles");
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/gpu_type_registry.yaml");
+        let registry =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/gpu_type_registry.yaml");
         let hw = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/hardware");
 
         let bundle = load_forge_bundle(&root, &profiles, &registry, &hw).unwrap();
@@ -506,12 +627,12 @@ mod tests {
             return;
         }
         let profiles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/profiles");
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../configs/gpu_type_registry.yaml");
+        let registry =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/gpu_type_registry.yaml");
         let hw = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/hardware");
         let mig = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/mig");
 
-        let metrics = run_forge_bundle(&root, &profiles, &registry, &hw, &mig).unwrap();
+        let metrics = run_forge_bundle(&root, &profiles, &registry, &hw, &mig, "fifo").unwrap();
         assert_eq!(metrics.jobs_completed, metrics.jobs_total);
         assert!(metrics.jobs_total >= 2);
     }
