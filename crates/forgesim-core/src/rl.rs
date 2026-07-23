@@ -24,7 +24,7 @@ pub struct RlSession {
     pub jobs_total: usize,
     pub top_k: usize,
     pub time_scale: f64,
-    last_wait_proxy: f64,
+    last_mean_wait: f64,
     done: bool,
 }
 
@@ -47,7 +47,7 @@ impl RlSession {
             jobs_total,
             top_k: top_k.max(1),
             time_scale: 1.0,
-            last_wait_proxy: 0.0,
+            last_mean_wait: 0.0,
             done: false,
         };
         session.reset();
@@ -59,7 +59,7 @@ impl RlSession {
         self.event_queue = EventQueue::new();
         self.pending_arrivals.clear();
         self.done = false;
-        self.last_wait_proxy = 0.0;
+        self.last_mean_wait = 0.0;
 
         let mut jobs = self.initial_jobs.clone();
         jobs.sort_by(|a, b| {
@@ -153,9 +153,9 @@ impl RlSession {
         }
 
         let observation = self.observe();
-        let wait_proxy = total_wait_proxy(&self.cluster);
-        let reward = self.last_wait_proxy - wait_proxy;
-        self.last_wait_proxy = wait_proxy;
+        let mean_wait = mean_cumulative_wait(&self.cluster);
+        let reward = self.last_mean_wait - mean_wait;
+        self.last_mean_wait = mean_wait;
 
         StepResult {
             observation,
@@ -243,6 +243,7 @@ impl RlSession {
     }
 
     fn advance_to_decision(&mut self) {
+        self.cluster.sort_waiting_by_priority();
         loop {
             if self.at_decision_point() {
                 break;
@@ -252,7 +253,7 @@ impl RlSession {
                 break;
             }
         }
-        self.last_wait_proxy = total_wait_proxy(&self.cluster);
+        self.last_mean_wait = mean_cumulative_wait(&self.cluster);
     }
 
     fn advance_after_action(&mut self, placed: bool) {
@@ -303,15 +304,12 @@ impl RlSession {
                     .position(|j| j.id == event.job_id)
                     .expect("arrival job must exist");
                 let mut job = self.pending_arrivals.remove(idx);
-                job.state = JobState::Waiting;
+                job.enter_waiting(self.cluster.clock.max(job.arrival_time));
                 if job.gang_enabled {
                     if let Some(timeout) = job.gang_timeout_secs.filter(|t| *t > 0.0) {
-                        self.event_queue.push(Event {
-                            time: job.arrival_time + timeout,
-                            kind: EventKind::GangTimeout,
-                            job_id: job.id.clone(),
-                            run_generation: 0,
-                        });
+                        job.gang_deadline = Some(job.arrival_time + timeout);
+                        job.gang_timeout_generation += 1;
+                        self.push_gang_timeout(&job);
                     }
                 }
                 self.cluster.enqueue_job(job);
@@ -324,25 +322,65 @@ impl RlSession {
                 self.cluster.finish_job(&event.job_id, self.cluster.clock);
             }
             EventKind::GangTimeout => {
-                let still_waiting = self
-                    .cluster
-                    .waiting_queue
-                    .iter()
-                    .any(|j| j.id == event.job_id && j.state == JobState::Waiting);
+                let still_waiting = self.cluster.waiting_queue.iter().any(|j| {
+                    j.id == event.job_id
+                        && j.state == JobState::Waiting
+                        && j.gang_timeout_generation == event.run_generation
+                });
                 if still_waiting {
                     self.cluster.fail_waiting_job(&event.job_id, self.cluster.clock);
                 }
             }
         }
+        self.drain_gang_timeout_rearms();
+    }
+
+    fn push_gang_timeout(&mut self, job: &Job) {
+        if !job.gang_enabled {
+            return;
+        }
+        let Some(deadline) = job.gang_deadline else {
+            return;
+        };
+        self.event_queue.push(Event {
+            time: deadline,
+            kind: EventKind::GangTimeout,
+            job_id: job.id.clone(),
+            run_generation: job.gang_timeout_generation,
+        });
+    }
+
+    fn drain_gang_timeout_rearms(&mut self) {
+        let ids = std::mem::take(&mut self.cluster.gang_timeout_rearm_ids);
+        for job_id in ids {
+            let snapshot = self
+                .cluster
+                .waiting_queue
+                .iter()
+                .find(|j| j.id == job_id)
+                .map(|j| (j.id.clone(), j.gang_deadline, j.gang_timeout_generation));
+            if let Some((id, Some(deadline), gen)) = snapshot {
+                self.event_queue.push(Event {
+                    time: deadline,
+                    kind: EventKind::GangTimeout,
+                    job_id: id,
+                    run_generation: gen,
+                });
+            }
+        }
     }
 }
 
-fn total_wait_proxy(cluster: &Cluster) -> f64 {
+fn mean_cumulative_wait(cluster: &Cluster) -> f64 {
+    if cluster.waiting_queue.is_empty() {
+        return 0.0;
+    }
     cluster
         .waiting_queue
         .iter()
-        .map(|job| crate::snapshot::job_wait_proxy(job, cluster.clock))
-        .sum()
+        .map(|job| crate::snapshot::job_current_cumulative_wait(job, cluster.clock))
+        .sum::<f64>()
+        / cluster.waiting_queue.len() as f64
 }
 
 pub fn default_top_k() -> usize {
