@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
+from forgesim.theme import heatmap_cmap, matplotlib_rcparams
+
 
 def _busy_matrix(timeline: dict[str, Any], *, bucket_size: float = 1.0) -> tuple[np.ndarray, list[str]]:
     jobs = timeline.get("jobs", [])
@@ -44,9 +46,10 @@ def plot_gpu_heatmap(
     bucket_size: float = 1.0,
     title: str = "GPU utilization",
 ) -> Figure:
+    plt.rcParams.update(matplotlib_rcparams())
     matrix, gpu_ids = _busy_matrix(timeline, bucket_size=bucket_size)
     fig, ax = plt.subplots(figsize=(10, max(3, len(gpu_ids) * 0.4)))
-    im = ax.imshow(matrix, aspect="auto", interpolation="nearest", cmap="viridis")
+    im = ax.imshow(matrix, aspect="auto", interpolation="nearest", cmap=heatmap_cmap())
     ax.set_yticks(range(len(gpu_ids)))
     ax.set_yticklabels(gpu_ids)
     ax.set_xlabel(f"time bucket ({bucket_size:g}s)")

@@ -1,4 +1,5 @@
 import type { JobsTimeline } from "@/types/simulation";
+import { ganttColors } from "@/lib/theme";
 import { Card } from "./ui";
 
 export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
@@ -7,9 +8,7 @@ export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
   }
 
   const makespan = timeline.makespan || 1;
-  const gpuIds = Array.from(
-    new Set(timeline.jobs.flatMap((j) => j.assigned_gpus))
-  ).sort();
+  const gpuIds = Array.from(new Set(timeline.jobs.flatMap((j) => j.assigned_gpus))).sort();
   const rows = gpuIds.length ? gpuIds : [`gpu-0`];
 
   return (
@@ -19,8 +18,11 @@ export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
           const jobsOnGpu = timeline.jobs.filter((j) => j.assigned_gpus.includes(gpuId));
           return (
             <div key={gpuId} className="flex items-center gap-2 text-xs">
-              <div className="w-16 shrink-0 text-slate-400">{gpuId}</div>
-              <div className="relative h-6 flex-1 rounded bg-slate-950">
+              <div className="w-16 shrink-0 font-mono text-hs-muted">{gpuId}</div>
+              <div
+                className="relative h-6 flex-1 rounded"
+                style={{ backgroundColor: ganttColors.track }}
+              >
                 {jobsOnGpu.map((job) => {
                   if (job.state === "failed") {
                     const left = (job.arrival_time / makespan) * 100;
@@ -28,8 +30,13 @@ export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
                     return (
                       <div
                         key={`${job.job_id}-failed`}
-                        className="absolute top-1 h-4 rounded border border-dashed border-red-400 bg-red-900/50"
-                        style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
+                        className="absolute top-1 h-4 rounded border border-dashed"
+                        style={{
+                          left: `${left}%`,
+                          width: `${Math.max(width, 1)}%`,
+                          borderColor: ganttColors.failed,
+                          backgroundColor: `${ganttColors.failed}80`,
+                        }}
                         title={`${job.name} (failed)`}
                       />
                     );
@@ -44,14 +51,22 @@ export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
                     <span key={job.job_id}>
                       {waitWidth > 0 && (
                         <div
-                          className="absolute top-1 h-4 rounded bg-orange-600/70"
-                          style={{ left: `${waitLeft}%`, width: `${waitWidth}%` }}
+                          className="absolute top-1 h-4 rounded"
+                          style={{
+                            left: `${waitLeft}%`,
+                            width: `${waitWidth}%`,
+                            backgroundColor: `${ganttColors.wait}B3`,
+                          }}
                           title={`wait: ${job.name}`}
                         />
                       )}
                       <div
-                        className="absolute top-1 h-4 rounded bg-teal-600/80"
-                        style={{ left: `${runLeft}%`, width: `${Math.max(runWidth, 0.5)}%` }}
+                        className="absolute top-1 h-4 rounded"
+                        style={{
+                          left: `${runLeft}%`,
+                          width: `${Math.max(runWidth, 0.5)}%`,
+                          backgroundColor: `${ganttColors.run}CC`,
+                        }}
                         title={`run: ${job.name}`}
                       />
                     </span>
@@ -62,10 +77,20 @@ export function GanttChart({ timeline }: { timeline: JobsTimeline | null }) {
           );
         })}
       </div>
-      <div className="mt-3 flex gap-4 text-xs text-slate-400">
-        <span className="inline-flex items-center gap-1"><span className="h-2 w-4 rounded bg-orange-600/70" /> wait</span>
-        <span className="inline-flex items-center gap-1"><span className="h-2 w-4 rounded bg-teal-600/80" /> run</span>
-        <span className="inline-flex items-center gap-1"><span className="h-2 w-4 rounded border border-dashed border-red-400 bg-red-900/50" /> failed</span>
+      <div className="mt-3 flex gap-4 text-xs text-hs-muted">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-4 rounded" style={{ backgroundColor: `${ganttColors.wait}B3` }} /> wait
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-4 rounded" style={{ backgroundColor: `${ganttColors.run}CC` }} /> run
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="h-2 w-4 rounded border border-dashed"
+            style={{ borderColor: ganttColors.failed, backgroundColor: `${ganttColors.failed}80` }}
+          />{" "}
+          failed
+        </span>
       </div>
     </Card>
   );

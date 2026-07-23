@@ -1,4 +1,5 @@
 import type { SimulationMetrics } from "@/types/simulation";
+import { chartColors } from "@/lib/theme";
 import {
   Bar,
   BarChart,
@@ -41,20 +42,32 @@ export function MetricsDashboard({ metrics }: { metrics: SimulationMetrics | nul
         <div className="grid gap-4 md:grid-cols-2">
           <ResponsiveContainer width="100%" height={180}>
             <BarChart data={bars}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="name" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="value" fill="#38bdf8" />
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+              <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
+              <YAxis tick={{ fill: chartColors.tick, fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#0b0f14",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  borderRadius: "8px",
+                }}
+              />
+              <Bar dataKey="value" fill={chartColors.bar} />
             </BarChart>
           </ResponsiveContainer>
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={series}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="name" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
-              <Tooltip />
-              <Line type="monotone" dataKey="value" stroke="#2dd4bf" strokeWidth={2} />
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+              <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
+              <YAxis tick={{ fill: chartColors.tick, fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#0b0f14",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  borderRadius: "8px",
+                }}
+              />
+              <Line type="monotone" dataKey="value" stroke={chartColors.line} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </div>

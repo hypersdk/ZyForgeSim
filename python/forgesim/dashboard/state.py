@@ -67,6 +67,18 @@ def render_util_bar(utilization: float, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
+def render_util_bar_rich(utilization: float, width: int = 10) -> Any:
+    from forgesim.theme import ACCENT, TEXT_DIM
+    from rich.text import Text
+
+    util = max(0.0, min(1.0, utilization))
+    filled = int(round(util * width))
+    bar = Text()
+    bar.append("█" * filled, style=ACCENT)
+    bar.append("░" * (width - filled), style=TEXT_DIM)
+    return bar
+
+
 def render_dashboard_text(state: DashboardState) -> str:
     lines = [
         "━" * 42,
@@ -95,8 +107,10 @@ def render_dashboard_rich(state: DashboardState) -> Any:
     from rich.console import Group
     from rich.panel import Panel
     from rich.table import Table
-    from rich.text import Text
 
+    from forgesim.theme import rich_styles
+
+    styles = rich_styles()
     summary = Table.grid(padding=(0, 2))
     summary.add_row("Simulation Time", format_sim_time(state.clock))
     summary.add_row("Running Jobs", str(state.running))
@@ -113,6 +127,7 @@ def render_dashboard_rich(state: DashboardState) -> Any:
         gpu_table.add_row(
             gpu.id,
             render_util_bar(gpu.utilization),
+            render_util_bar_rich(gpu.utilization),
             f"{pct}%",
         )
 
@@ -124,7 +139,7 @@ def render_dashboard_rich(state: DashboardState) -> Any:
             queue_table.add_row(f"{idx}. {name}")
 
     return Group(
-        Panel(summary, title="ForgeSim", border_style="cyan"),
-        Panel(gpu_table, border_style="green"),
-        Panel(queue_table, title="Waiting", border_style="yellow"),
+        Panel(summary, title="ForgeSim · Zyvor AI Labs", border_style=styles["summary"]),
+        Panel(gpu_table, border_style=styles["gpu"]),
+        Panel(queue_table, title="Waiting", border_style=styles["queue"]),
     )

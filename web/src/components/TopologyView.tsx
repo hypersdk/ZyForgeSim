@@ -3,6 +3,7 @@
 import ReactFlow, { Background, Controls, Edge, Node } from "reactflow";
 import "reactflow/dist/style.css";
 import type { ClusterSnapshot } from "@/types/simulation";
+import { gpuStateColors, theme } from "@/lib/theme";
 import { Card } from "./ui";
 
 export function TopologyView({ snapshot }: { snapshot: ClusterSnapshot | null }) {
@@ -21,9 +22,9 @@ export function TopologyView({ snapshot }: { snapshot: ClusterSnapshot | null })
         position: { x: x + gpuIdx * 120, y: nodeIdx * 100 },
         data: { label: `${gpu.id}${gpu.busy ? `\n${gpu.job_name ?? "busy"}` : "\nidle"}` },
         style: {
-          background: gpu.busy ? "#1e3a8a" : "#14532d",
-          color: "#fff",
-          border: "1px solid #475569",
+          background: gpu.busy ? gpuStateColors.busy : gpuStateColors.idle,
+          color: theme.textBody,
+          border: `1px solid ${theme.border}`,
           fontSize: 11,
           whiteSpace: "pre",
           width: 90,
@@ -35,6 +36,8 @@ export function TopologyView({ snapshot }: { snapshot: ClusterSnapshot | null })
           source: node.gpus[gpuIdx - 1].id,
           target: id,
           label: gpu.nvlink_group != null ? "NVLink" : "PCIe",
+          style: { stroke: theme.textMuted },
+          labelStyle: { fill: theme.textMuted, fontSize: 10 },
         });
       }
     });
@@ -43,9 +46,9 @@ export function TopologyView({ snapshot }: { snapshot: ClusterSnapshot | null })
 
   return (
     <Card title="GPU Topology">
-      <div className="h-64 rounded border border-slate-800">
+      <div className="h-64 rounded-hs border border-hs-border" style={{ backgroundColor: theme.surfaceCode }}>
         <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
-          <Background />
+          <Background color={theme.border} gap={16} />
           <Controls />
         </ReactFlow>
       </div>

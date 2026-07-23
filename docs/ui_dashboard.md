@@ -306,6 +306,20 @@ Open http://localhost:3000, select `small_h100.yaml`, click **Run simulation**.
 
 ---
 
+## Brand / theming
+
+All ForgeSim UI surfaces share the Zyvor / HyperSDK design tokens from [zyvor.dev](https://zyvor.dev):
+
+| Surface | Token source |
+|---------|--------------|
+| Web dashboard | [`web/src/styles/zyvor-tokens.css`](../web/src/styles/zyvor-tokens.css), [`web/src/lib/theme.ts`](../web/src/lib/theme.ts) |
+| Rich CLI dashboard | [`python/forgesim/theme.py`](../python/forgesim/theme.py) |
+| Matplotlib Gantt / heatmap | Same Python module (`ACCENT_ORANGE`, `TEAL`, custom heatmap colormap) |
+
+Key colors: background `#050505`, primary accent `#f0583a`, busy GPU `#6366f1`, idle `#22c55e`, Gantt run `#10b981`. The web header displays the Zyvor logo with “ForgeSim · Zyvor AI Labs”.
+
+---
+
 ## Common errors
 
 | Error | Fix |
