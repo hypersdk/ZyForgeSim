@@ -26,6 +26,9 @@ venv/
 # Maturin
 *.whl
 
+# Setup bootstrap (downloaded on demand)
+scripts/get-pip.py
+
 # Outputs
 outputs/
 runs/

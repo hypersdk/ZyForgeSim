@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/viz/jobs_small.json"
 
 
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
+    value = hex_color.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+
+
 class TestViz(unittest.TestCase):
     def test_load_timeline(self) -> None:
         from forgesim.viz.timeline import load_timeline
@@ -16,6 +21,23 @@ class TestViz(unittest.TestCase):
         data = load_timeline(FIXTURE)
         self.assertEqual(len(data["jobs"]), 2)
         self.assertEqual(data["gpu_count"], 2)
+
+    def test_gantt_theme_colors(self) -> None:
+        try:
+            __import__("matplotlib")
+        except ImportError:
+            self.skipTest("matplotlib not installed")
+
+        from forgesim.theme import ACCENT_ORANGE, TEAL
+        from forgesim.viz.gantt import plot_gantt
+        from forgesim.viz.timeline import load_timeline
+
+        data = load_timeline(FIXTURE)
+        fig = plot_gantt(data)
+        ax = fig.axes[0]
+        patch_colors = {tuple(p.get_facecolor()[:3]) for p in ax.patches}
+        self.assertIn(_hex_to_rgb01(ACCENT_ORANGE), patch_colors)
+        self.assertIn(_hex_to_rgb01(TEAL), patch_colors)
 
     def test_save_run_figures(self) -> None:
         try:

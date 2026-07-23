@@ -1,3 +1,5 @@
+@import "../styles/zyvor-tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -7,5 +9,81 @@
 }
 
 body {
-  @apply bg-slate-950 text-slate-100;
+  background: var(--hs-bg);
+  background-image: var(--hs-gradient-section);
+  color: var(--hs-text-body);
+  min-height: 100vh;
+}
+
+@layer components {
+  .zyvor-card {
+    border-radius: var(--hs-radius-lg);
+    border: 1px solid var(--hs-border);
+    background: color-mix(in srgb, var(--hs-surface) 80%, transparent);
+    padding: 1rem;
+    box-shadow: var(--hs-shadow-card);
+    backdrop-filter: blur(4px);
+  }
+
+  .zyvor-btn-primary {
+    border-radius: var(--hs-radius);
+    border: 0;
+    background: linear-gradient(135deg, var(--hs-accent), var(--hs-accent-orange));
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--hs-text-white);
+    box-shadow: var(--hs-shadow-accent);
+    transition: opacity 0.15s ease;
+  }
+
+  .zyvor-btn-primary:hover {
+    opacity: 0.9;
+  }
+
+  .zyvor-btn-primary:disabled {
+    opacity: 0.5;
+  }
+
+  .zyvor-btn-secondary {
+    border-radius: var(--hs-radius);
+    border: 1px solid var(--hs-border);
+    background: var(--hs-surface);
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--hs-text-body);
+    transition: border-color 0.15s ease;
+  }
+
+  .zyvor-btn-secondary:hover {
+    border-color: var(--hs-border-accent);
+  }
+
+  .zyvor-btn-secondary:disabled {
+    opacity: 0.5;
+  }
+
+  .zyvor-input {
+    border-radius: var(--hs-radius);
+    border: 1px solid var(--hs-border);
+    background: var(--hs-bg);
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    color: var(--hs-text-body);
+  }
+
+  .zyvor-input:focus {
+    border-color: var(--hs-border-accent-strong);
+    outline: none;
+  }
+
+  .zyvor-link {
+    color: var(--hs-accent-light);
+    text-decoration: none;
+  }
+
+  .zyvor-link:hover {
+    color: var(--hs-accent-orange);
+    text-decoration: underline;
+  }
 }
