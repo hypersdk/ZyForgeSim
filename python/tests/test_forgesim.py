@@ -59,6 +59,26 @@ class TestForgeCRDAdapter(unittest.TestCase):
         self.assertTrue(job["gang_enabled"])
         self.assertEqual(job["gang_size_nodes"], 4)
 
+    def test_gang_timeout_parsed_from_annotation(self) -> None:
+        from forgesim.adapters.crd import fabric_ai_job_to_job
+
+        manifest = {
+            "metadata": {
+                "name": "gang-job",
+                "namespace": "default",
+                "annotations": {
+                    "forge.ai/gang-schedule": "true",
+                    "forge.ai/gang-size": "2",
+                    "forge.ai/gang-timeout": "10m",
+                },
+            },
+            "spec": {"gpus": 4, "model": "gpt-13b", "gpuType": "H100"},
+        }
+        job = fabric_ai_job_to_job(
+            manifest, runtime_seconds=100.0, gpu_memory_gb=80.0
+        )
+        self.assertEqual(job["gang_timeout_secs"], 600.0)
+
     def test_tenant_from_fabric_quota_not_job_spec(self) -> None:
         from forgesim.adapters.crd import fabric_ai_job_to_job, resolve_tenant
 

@@ -7,6 +7,7 @@ pub mod models;
 pub mod resource;
 pub mod rl;
 pub mod snapshot;
+pub mod topology;
 
 pub use cluster::Cluster;
 pub use engine::{Scheduler, SimulationEngine};
@@ -17,6 +18,7 @@ pub use mig::{
     MigHardwareConfig, MigProfileRegistry, MigProfileSpec,
 };
 pub use models::{Gpu, Job, JobState, MigSlice, Node, Placement};
-pub use resource::ResourceManager;
+pub use resource::{GpuSelectionPolicy, ResourceManager};
 pub use rl::{default_top_k, RlSession, StepResult};
 pub use snapshot::{obs_size, ClusterSnapshot, JobSnapshot, DEFAULT_OBS_TOP_K};
+pub use topology::TopologyGraph;

@@ -60,7 +60,10 @@ impl<S: Scheduler> SimulationEngine<S> {
             self.cluster.clock = event.time;
             match event.kind {
                 EventKind::JobArrival => self.handle_arrival(&event.job_id),
-                EventKind::JobComplete => self.handle_complete(&event.job_id, event.run_generation),
+                EventKind::JobComplete => {
+                    self.handle_complete(&event.job_id, event.run_generation)
+                }
+                EventKind::GangTimeout => self.handle_gang_timeout(&event.job_id),
             }
         }
     }
@@ -73,8 +76,30 @@ impl<S: Scheduler> SimulationEngine<S> {
             .expect("arrival job must exist");
         let mut job = self.pending_arrivals.remove(idx);
         job.state = JobState::Waiting;
+        if job.gang_enabled {
+            if let Some(timeout) = job.gang_timeout_secs.filter(|t| *t > 0.0) {
+                self.event_queue.push(Event {
+                    time: job.arrival_time + timeout,
+                    kind: EventKind::GangTimeout,
+                    job_id: job.id.clone(),
+                    run_generation: 0,
+                });
+            }
+        }
         self.cluster.enqueue_job(job);
         self.try_schedule();
+    }
+
+    fn handle_gang_timeout(&mut self, job_id: &str) {
+        let still_waiting = self
+            .cluster
+            .waiting_queue
+            .iter()
+            .any(|j| j.id == job_id && j.state == JobState::Waiting);
+        if still_waiting {
+            self.cluster.fail_waiting_job(job_id, self.cluster.clock);
+            self.try_schedule();
+        }
     }
 
     fn handle_complete(&mut self, job_id: &str, run_generation: u32) {
@@ -96,7 +121,12 @@ impl<S: Scheduler> SimulationEngine<S> {
         for placement in placements {
             if let Some(mut job) = self.take_waiting_job(&placement.job_id) {
                 job.run_generation += 1;
-                let duration = job.duration_remaining();
+                let duration = job.duration_remaining() * placement.runtime_multiplier;
+                if placement.runtime_multiplier > 1.0 {
+                    let base = job.duration_remaining();
+                    self.cluster.topology_runtime_inflation +=
+                        base * (placement.runtime_multiplier - 1.0);
+                }
                 let run_generation = job.run_generation;
                 self.cluster
                     .start_job(job.clone(), &placement.gpu_ids, placement.start_time);
@@ -249,5 +279,31 @@ mod tests {
             .find(|j| j.id == "high")
             .expect("high finished");
         assert_eq!(high.finish_time, Some(25.0));
+    }
+
+    struct NoopScheduler;
+
+    impl Scheduler for NoopScheduler {
+        fn schedule(
+            &mut self,
+            _cluster: &mut Cluster,
+            _rm: &ResourceManager,
+        ) -> Vec<Placement> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn gang_timeout_fails_job_that_never_fits() {
+        let mut engine = SimulationEngine::new(cluster(), NoopScheduler);
+        let mut job = Job::new("g1", "gang", 0.0, 10.0, 4);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(2);
+        job.gang_timeout_secs = Some(5.0);
+        engine.submit_jobs(vec![job]);
+        engine.run();
+        assert_eq!(engine.cluster.finished_jobs.len(), 1);
+        assert_eq!(engine.cluster.finished_jobs[0].state, JobState::Failed);
+        assert_eq!(engine.cluster.finished_jobs[0].finish_time, Some(5.0));
     }
 }

@@ -1,12 +1,14 @@
+mod bestfit;
 mod common;
 mod fifo;
+mod forge;
 mod preemptive;
 mod priority;
-mod stubs;
 
+pub use bestfit::BestFitScheduler;
 pub use fifo::FifoScheduler;
+pub use forge::ForgeScheduler;
 pub use preemptive::PreemptivePriorityScheduler;
 pub use priority::PriorityScheduler;
-pub use stubs::{BestFitScheduler, ForgeScheduler};
 
 pub use forgesim_core::engine::Scheduler;

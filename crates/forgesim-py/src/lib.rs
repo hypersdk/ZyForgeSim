@@ -24,6 +24,10 @@ struct SimResult {
     preemptions: u32,
     #[pyo3(get)]
     topology_penalties: u32,
+    #[pyo3(get)]
+    topology_runtime_inflation: f64,
+    #[pyo3(get)]
+    jobs_failed: usize,
 }
 
 impl From<SimulationMetrics> for SimResult {
@@ -37,6 +41,8 @@ impl From<SimulationMetrics> for SimResult {
             mig_reconfigs: m.mig_reconfigs,
             preemptions: m.preemptions,
             topology_penalties: m.topology_penalties,
+            topology_runtime_inflation: m.topology_runtime_inflation,
+            jobs_failed: m.jobs_failed,
         }
     }
 }
@@ -65,6 +71,8 @@ impl SimResult {
             mig_reconfigs: self.mig_reconfigs,
             preemptions: self.preemptions,
             topology_penalties: self.topology_penalties,
+            topology_runtime_inflation: self.topology_runtime_inflation,
+            jobs_failed: self.jobs_failed,
         };
         m.to_json_pretty()
     }

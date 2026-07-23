@@ -53,10 +53,10 @@ cargo run -p forgesim-cli -- run --config configs/clusters/priority_scheduler.ya
 # Preemptive: evict lower-priority running jobs for higher-priority arrivals
 cargo run -p forgesim-cli -- run --config configs/clusters/preemption_preemptive.yaml
 
-# Forge bundle with scheduler flag
+# Forge bundle with scheduler flag (fifo | priority | preemptive | forge | bestfit)
 cargo run -p forgesim-cli -- run \
   --forge-bundle tests/fixtures/forge \
-  --scheduler preemptive
+  --scheduler forge
 ```
 
 ### Scheduler trace replay (M3 — compare vs production Forge)
@@ -80,11 +80,14 @@ MIG jobs use `mig_profile` and `mig_count` (Forge `spec.mig`) to allocate fracti
 ### Topology + gang placement (M5 / M6)
 
 ```bash
-# NVLink-domain-aware placement with topology_penalties metric
-cargo run -p forgesim-cli -- run --config configs/clusters/topology_h100.yaml
+# NVLink-domain-aware placement; cross-domain jobs inflate runtime
+cargo run -p forgesim-cli -- run --config configs/clusters/topology_penalty.yaml
 
 # Gang jobs require GPUs spread across gang_size_nodes distinct nodes
 cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
+
+# Gang timeout fails jobs that cannot be placed in time (jobs_failed metric)
+cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
 ```
 
 ### Visualization (M8)
@@ -142,7 +145,9 @@ docs/                Architecture, milestones, Forge input mapping
 
 ## Milestones
 
-See [docs/milestones.md](docs/milestones.md). M1–M8 are complete.
+See [docs/milestones.md](docs/milestones.md). **M1–M8 complete**, including topology runtime inflation, gang timeout, RL (M7), and visualization (M8).
+
+Schedulers: `fifo`, `priority`, `preemptive`, `forge` (alias for preemptive), `bestfit`.
 
 ## Forge input
 

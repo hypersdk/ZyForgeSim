@@ -1,26 +1,24 @@
 # M5 — Topology (scoping)
 
-Status: **done** (first slice). Domain-level NVLink grouping with scatter
-fallback and `topology_penalties` metric. See
+Status: **done** (domain grouping + runtime inflation). Domain-level NVLink
+grouping with scatter fallback, `topology_penalties`, and
+`topology_runtime_inflation` when jobs span domains. See
+[`topology.rs`](../../crates/forgesim-core/src/topology.rs) and
 [`resource.rs`](../../crates/forgesim-core/src/resource.rs).
 
 ## What exists today
 
-Topology fields are already modeled but inert — nothing reads them:
+Implemented in `forgesim-core`:
 
-- `Gpu.nvlink_group: Option<u32>` (`crates/forgesim-core/src/models.rs`) — set by
-  `ForgeBundleAdapter` as `i / 2` (pairs GPUs 0-1, 2-3, ...), a placeholder, not
-  real topology (`crates/forgesim-config/src/forge_bundle.rs:349`).
-- `HardwareProfile.nvlink_bw_gbs` / `pcie_bw_gbs` (`configs/hardware/*.yaml`) —
-  per-GPU-type bandwidth constants, not wired to any node/link graph.
-- `Job.network_bw_gbps` — a hint carried from `spec.network: rdma` in
-  `FabricAIJob`, currently unused by `ResourceManager::can_place` /
-  `allocate` (`crates/forgesim-core/src/resource.rs`).
-
-Placement today (`ResourceManager::can_place_whole_gpu`) picks any GPUs with
-free capacity across nodes with no locality preference — a distributed job's
-32 GPUs can land scattered across nodes with no NVLink/RDMA path between them
-and the simulator won't notice.
+- `Gpu.nvlink_group: Option<u32>` — set by `ForgeBundleAdapter` as `i / 2`
+  (pairs GPUs 0-1, 2-3, …) until Forge exports real topology.
+- `HardwareProfile.nvlink_bw_gbs` / `pcie_bw_gbs` — feed `TopologyGraph` for
+  runtime inflation when jobs span NVLink domains or nodes.
+- `Job.network_bw_gbps` — jobs with this set (or `gang_enabled`) prefer
+  same-`nvlink_group` placement in `ResourceManager::can_place_whole_gpu`.
+- Scatter fallback increments `topology_penalties`; cross-domain placement
+  inflates job duration via `Placement.runtime_multiplier`
+  (`topology_runtime_inflation` in metrics).
 
 ## Goal
 

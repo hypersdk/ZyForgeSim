@@ -8,6 +8,7 @@ pub enum JobState {
     Waiting,
     Running,
     Finished,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +32,8 @@ pub struct Job {
     pub gang_enabled: bool,
     #[serde(default)]
     pub gang_size_nodes: Option<u32>,
+    #[serde(default)]
+    pub gang_timeout_secs: Option<f64>,
     #[serde(default)]
     pub mig_profile: Option<String>,
     #[serde(default)]
@@ -78,6 +81,7 @@ impl Job {
             namespace: None,
             gang_enabled: false,
             gang_size_nodes: None,
+            gang_timeout_secs: None,
             mig_profile: None,
             mig_count: None,
             state: JobState::Pending,
@@ -273,4 +277,10 @@ pub struct Placement {
     pub job_id: String,
     pub gpu_ids: Vec<String>,
     pub start_time: f64,
+    #[serde(default = "default_runtime_multiplier")]
+    pub runtime_multiplier: f64,
+}
+
+fn default_runtime_multiplier() -> f64 {
+    1.0
 }

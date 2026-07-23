@@ -22,10 +22,13 @@ pub use trace::{
 use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::{Gpu, Job, Node};
-use forgesim_core::resource::ResourceManager;
+use forgesim_core::resource::{GpuSelectionPolicy, ResourceManager};
 use forgesim_core::rl::RlSession;
+use forgesim_core::topology::TopologyGraph;
 use forgesim_metrics::{JobsTimeline, SimulationMetrics};
-use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
+use forgesim_scheduler::{
+    BestFitScheduler, FifoScheduler, ForgeScheduler, PriorityScheduler,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -142,6 +145,8 @@ pub struct WorkloadJobSpec {
     pub gang_enabled: bool,
     #[serde(default)]
     pub gang_size_nodes: Option<u32>,
+    #[serde(default)]
+    pub gang_timeout_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,6 +197,7 @@ pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
             mig_count: j.mig_count,
             gang_enabled: j.gang_enabled,
             gang_size_nodes: j.gang_size_nodes,
+            gang_timeout_secs: j.gang_timeout_secs,
             ..Job::new("", "", 0.0, 0.0, 0)
         })
         .collect())
@@ -223,7 +229,22 @@ pub fn build_cluster(
             gpus,
         });
     }
+    let mut nvlink_bw: f64 = 900.0;
+    let mut pcie_bw: f64 = 64.0;
+    for node_spec in &cluster_cfg.nodes {
+        for gpu_spec in &node_spec.gpus {
+            if let Some(profile) = profiles.get(&gpu_spec.profile) {
+                if let Some(v) = profile.nvlink_bw_gbs {
+                    nvlink_bw = nvlink_bw.max(v);
+                }
+                if let Some(v) = profile.pcie_bw_gbs {
+                    pcie_bw = pcie_bw.max(v);
+                }
+            }
+        }
+    }
     let mut cluster = Cluster::new(nodes);
+    cluster.topology = TopologyGraph::from_profile_bandwidths(nvlink_bw, pcie_bw);
     cluster.tenant_quotas = cluster_cfg.tenant_quotas.clone();
     Ok(cluster)
 }
@@ -273,33 +294,15 @@ pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationRepor
         ));
     }
 
-    let resource_manager = match mig_registry {
-        Some(registry) => ResourceManager::with_mig(registry),
-        None => ResourceManager::new(),
-    };
+    let resource_manager = build_resource_manager(mig_registry, &config.scheduler.r#type);
 
-    let (cluster, metrics) = match config.scheduler.r#type.as_str() {
-        "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
-        "priority" => run_to_completion(
-            cluster,
-            PriorityScheduler,
-            resource_manager,
-            jobs,
-            jobs_total,
-        ),
-        "preemptive" => run_to_completion(
-            cluster,
-            PreemptivePriorityScheduler,
-            resource_manager,
-            jobs,
-            jobs_total,
-        ),
-        other => {
-            return Err(ConfigError::Invalid(format!(
-                "unsupported scheduler type '{other}'"
-            )));
-        }
-    };
+    let (cluster, metrics) = run_to_completion_with_policy(
+        cluster,
+        &config.scheduler.r#type,
+        resource_manager,
+        jobs,
+        jobs_total,
+    )?;
 
     Ok(SimulationReport {
         metrics,
@@ -349,6 +352,59 @@ pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
         jobs,
         forgesim_core::DEFAULT_OBS_TOP_K,
     ))
+}
+
+fn build_resource_manager(
+    mig_registry: Option<forgesim_core::mig::MigProfileRegistry>,
+    scheduler: &str,
+) -> ResourceManager {
+    let rm = match mig_registry {
+        Some(registry) => ResourceManager::with_mig(registry),
+        None => ResourceManager::new(),
+    };
+    if scheduler == "bestfit" {
+        rm.with_gpu_selection(GpuSelectionPolicy::BestFit)
+    } else {
+        rm
+    }
+}
+
+fn run_to_completion_with_policy(
+    cluster: Cluster,
+    scheduler: &str,
+    resource_manager: ResourceManager,
+    jobs: Vec<Job>,
+    jobs_total: usize,
+) -> ConfigResult<(Cluster, SimulationMetrics)> {
+    Ok(match scheduler {
+        "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
+        "priority" => run_to_completion(
+            cluster,
+            PriorityScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
+        "preemptive" | "forge" => run_to_completion(
+            cluster,
+            ForgeScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
+        "bestfit" => run_to_completion(
+            cluster,
+            BestFitScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "unsupported scheduler type '{other}'"
+            )));
+        }
+    })
 }
 
 fn run_to_completion<S: Scheduler>(

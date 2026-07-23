@@ -118,6 +118,7 @@ fn integration_forge_bundle_gang_and_mig_fields() {
         .expect("gang job");
     assert_eq!(gang.gpu_count, 32);
     assert!(gang.gang_enabled);
+    assert_eq!(gang.gang_timeout_secs, Some(600.0));
 
     let mig = loaded
         .jobs
@@ -222,6 +223,44 @@ fn integration_gang_job_waits_for_node_capacity() {
         .find(|j| j.name == "gang-wait")
         .expect("gang job");
     assert!(gang.start_time.unwrap_or(0.0) >= 60.0);
+}
+
+#[test]
+fn integration_gang_job_fails_when_gang_timeout_expires() {
+    let config = repo_root().join("configs/clusters/gang_timeout_m6.yaml");
+    if !config.exists() {
+        return;
+    }
+    let report =
+        forgesim_config::run_simulation_report(&config).expect("gang timeout simulation");
+    assert_eq!(report.metrics.jobs_completed, 1);
+    assert_eq!(report.metrics.jobs_failed, 1);
+    let gang = report
+        .timeline
+        .jobs
+        .iter()
+        .find(|j| j.name == "gang-timeout")
+        .expect("gang job");
+    assert_eq!(gang.state, "failed");
+    assert_eq!(gang.finish_time, Some(31.0));
+}
+
+#[test]
+fn integration_topology_runtime_inflation_on_cross_domain_placement() {
+    let config = repo_root().join("configs/clusters/topology_penalty.yaml");
+    if !config.exists() {
+        return;
+    }
+    let report = forgesim_config::run_simulation_report(&config).expect("topology simulation");
+    assert_eq!(report.metrics.topology_penalties, 1);
+    assert!(report.metrics.topology_runtime_inflation > 0.0);
+    let job = report
+        .timeline
+        .jobs
+        .iter()
+        .find(|j| j.name == "cross-domain")
+        .expect("job");
+    assert_eq!(job.finish_time, Some(10.0 + report.metrics.topology_runtime_inflation));
 }
 
 #[test]

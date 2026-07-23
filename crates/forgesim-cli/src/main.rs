@@ -37,7 +37,7 @@ enum Commands {
         #[arg(long, default_value = "configs/mig")]
         mig_profiles_dir: PathBuf,
         /// Scheduler policy to simulate (with --forge-bundle; --config uses its own scheduler.type)
-        #[arg(long, default_value = "fifo")]
+        #[arg(long, default_value = "fifo", value_parser = ["fifo", "priority", "preemptive", "forge", "bestfit"])]
         scheduler: String,
         /// Write metrics JSON to this path
         #[arg(short, long)]
@@ -67,7 +67,7 @@ enum Commands {
         #[arg(long, default_value = "configs/profiles")]
         profiles_dir: PathBuf,
         /// Scheduler policy to simulate
-        #[arg(long, default_value = "fifo")]
+        #[arg(long, default_value = "fifo", value_parser = ["fifo", "priority", "preemptive", "forge", "bestfit"])]
         scheduler: String,
         /// Write diff report JSON to this path
         #[arg(short, long)]
@@ -96,6 +96,15 @@ fn print_metrics(metrics: forgesim_metrics::SimulationMetrics, output: Option<Pa
 
     if metrics.topology_penalties > 0 {
         println!("  topology penalties: {}", metrics.topology_penalties);
+    }
+    if metrics.topology_runtime_inflation > 0.0 {
+        println!(
+            "  topology inflation: {:.2}s",
+            metrics.topology_runtime_inflation
+        );
+    }
+    if metrics.jobs_failed > 0 {
+        println!("  jobs failed:       {}", metrics.jobs_failed);
     }
 
     let json = metrics.to_json_pretty();

@@ -1,4 +1,5 @@
 use forgesim_core::cluster::Cluster;
+use forgesim_core::models::JobState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,25 +91,44 @@ pub struct SimulationMetrics {
     pub preemptions: u32,
     #[serde(default)]
     pub topology_penalties: u32,
+    #[serde(default)]
+    pub topology_runtime_inflation: f64,
+    #[serde(default)]
+    pub jobs_failed: usize,
 }
 
 impl SimulationMetrics {
     pub fn from_cluster(cluster: &Cluster, jobs_total: usize) -> Self {
         let finished = &cluster.finished_jobs;
+        let finished_success: Vec<_> = finished
+            .iter()
+            .filter(|j| j.state == JobState::Finished)
+            .collect();
+        let jobs_failed = finished
+            .iter()
+            .filter(|j| j.state == JobState::Failed)
+            .count();
+
         let makespan = finished
             .iter()
             .filter_map(|j| j.finish_time)
             .fold(0.0_f64, f64::max);
 
-        let mean_wait_time = if finished.is_empty() {
+        let mean_wait_time = if finished_success.is_empty() {
             0.0
         } else {
-            finished.iter().map(|j| j.wait_time()).sum::<f64>() / finished.len() as f64
+            finished_success.iter().map(|j| j.wait_time()).sum::<f64>()
+                / finished_success.len() as f64
         };
 
-        let gpu_seconds_busy: f64 = finished
+        let gpu_seconds_busy: f64 = finished_success
             .iter()
-            .map(|j| j.runtime * j.gpu_count as f64)
+            .map(|j| {
+                match (j.start_time, j.finish_time) {
+                    (Some(s), Some(f)) => (f - s).max(0.0) * j.gpu_count as f64,
+                    _ => j.runtime * j.gpu_count as f64,
+                }
+            })
             .sum();
         let gpu_count = cluster.gpu_count().max(1) as f64;
         let gpu_utilization = if makespan > 0.0 {
@@ -121,12 +141,14 @@ impl SimulationMetrics {
             makespan,
             mean_wait_time,
             gpu_utilization,
-            jobs_completed: finished.len(),
+            jobs_completed: finished_success.len(),
             jobs_total,
             queue_max_length: 0,
             mig_reconfigs: cluster.mig_reconfigs,
             preemptions: cluster.total_preemptions,
             topology_penalties: cluster.topology_penalties,
+            topology_runtime_inflation: cluster.topology_runtime_inflation,
+            jobs_failed,
         }
     }
 

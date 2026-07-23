@@ -6,8 +6,8 @@
 | **M2 — Forge Compatibility** | Done | Multi-CRD ingest, corrected mappings, profiles, `--forge-bundle` CLI |
 | **M3 — Trace replay** | Done | Scheduler event JSONL replay + oracle vs FIFO diff report |
 | **M4 — MIG simulation** | Done | MIG slice partition/reconfig with simulated delay |
-| **M5 — Topology** | Done | NVLink-domain-aware placement + `topology_penalties` metric |
-| **M6 — Forge scheduler features** | Done | Quotas, priority, preemption, node-aware gang placement |
+| **M5 — Topology** | Done | NVLink-domain placement, `topology_penalties`, runtime inflation via `TopologyGraph` |
+| **M6 — Forge scheduler features** | Done | Quotas, priority, preemption, gang spread + timeout, `forge`/`bestfit` schedulers |
 | **M7 — RL** | Done | Gymnasium wrapper, PPO baseline, stepped `RlSession` |
 | **M8 — Visualization** | Done | Gantt, heatmaps, `--jobs-output` timeline JSON |
 
@@ -47,8 +47,9 @@ cargo run -p forgesim-cli -- replay \
 cargo run -p forgesim-cli -- run --config configs/clusters/preemption_preemptive.yaml
 
 # Topology + gang (M5 / M6)
-cargo run -p forgesim-cli -- run --config configs/clusters/topology_h100.yaml
+cargo run -p forgesim-cli -- run --config configs/clusters/topology_penalty.yaml
 cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
+cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
 
 # Timeline export + viz (M8)
 cargo run -p forgesim-cli -- run \
@@ -88,6 +89,8 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 
 - [x] Jobs with `network_bw_gbps` or `gang_enabled` prefer same `nvlink_group`
 - [x] Fallback scatter placement increments `topology_penalties` in metrics
+- [x] Cross-domain placement inflates job runtime via `topology_runtime_inflation`
+- [x] `TopologyGraph` built from hardware profile NVLink/PCIe bandwidths
 - [x] Integration test `integration_topology_workload_completes`
 - [x] Example config `configs/clusters/topology_h100.yaml`
 
@@ -96,7 +99,10 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 - [x] Quotas: `FabricQuota.spec.gpuQuota.maxGPUs` enforced per tenant at placement time
 - [x] Priority scheduler: `scheduler.type: priority` / `--scheduler priority`
 - [x] Preemption: `scheduler.type: preemptive` / `--scheduler preemptive`
+- [x] Forge scheduler: `scheduler.type: forge` / `--scheduler forge` (alias for preemptive priority)
+- [x] Best-fit: `scheduler.type: bestfit` / `--scheduler bestfit` (tightest-node GPU packing)
 - [x] Gang: `gang_enabled` + `gang_size_nodes` require GPUs across N distinct nodes (all-or-nothing)
+- [x] Gang timeout: `gang_timeout_secs` / `forge.ai/gang-timeout` fails waiting gang jobs (`jobs_failed` metric)
 - [x] Integration tests for priority, preemption, gang
 
 ## M7 success criteria
