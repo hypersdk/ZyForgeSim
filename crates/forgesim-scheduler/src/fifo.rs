@@ -3,6 +3,8 @@ use forgesim_core::engine::Scheduler;
 use forgesim_core::models::Placement;
 use forgesim_core::resource::ResourceManager;
 
+use crate::common::place_in_order;
+
 /// First-in-first-out scheduler: earliest arrival first, all-or-nothing GPU placement.
 #[derive(Debug, Default, Clone)]
 pub struct FifoScheduler;
@@ -14,39 +16,8 @@ impl Scheduler for FifoScheduler {
         resource_manager: &ResourceManager,
     ) -> Vec<Placement> {
         cluster.sort_waiting_by_arrival();
-        let waiting: Vec<_> = cluster.waiting_queue.to_vec();
-        let mut placements = Vec::new();
-
-        for job in waiting {
-            if !resource_manager.can_place(cluster, &job) {
-                continue;
-            }
-            match resource_manager.allocate(cluster, &job, cluster.clock) {
-                Ok(placement) => {
-                    for resource_id in &placement.gpu_ids {
-                        if let Some(slice) = cluster.slice_mut(resource_id) {
-                            slice.running_job_id = Some(job.id.clone());
-                        } else if let Some(gpu) = cluster.gpu_mut(resource_id) {
-                            gpu.running_job_id = Some(job.id.clone());
-                        }
-                    }
-                    placements.push(placement);
-                }
-                Err(_) => continue,
-            }
-        }
-
-        for placement in &placements {
-            for resource_id in &placement.gpu_ids {
-                if let Some(slice) = cluster.slice_mut(resource_id) {
-                    slice.running_job_id = None;
-                } else if let Some(gpu) = cluster.gpu_mut(resource_id) {
-                    gpu.running_job_id = None;
-                }
-            }
-        }
-
-        placements
+        let waiting = cluster.waiting_queue.to_vec();
+        place_in_order(cluster, resource_manager, waiting)
     }
 }
 

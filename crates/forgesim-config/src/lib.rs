@@ -20,11 +20,11 @@ pub use trace::{
 };
 
 use forgesim_core::cluster::Cluster;
-use forgesim_core::engine::SimulationEngine;
+use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::FifoScheduler;
+use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -261,8 +261,15 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         None => ResourceManager::new(),
     };
 
-    let mut engine = match config.scheduler.r#type.as_str() {
-        "fifo" => SimulationEngine::with_resource_manager(cluster, FifoScheduler, resource_manager),
+    let metrics = match config.scheduler.r#type.as_str() {
+        "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
+        "priority" => run_to_completion(
+            cluster,
+            PriorityScheduler,
+            resource_manager,
+            jobs,
+            jobs_total,
+        ),
         other => {
             return Err(ConfigError::Invalid(format!(
                 "unsupported scheduler type '{other}'"
@@ -270,10 +277,20 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         }
     };
 
+    Ok(metrics)
+}
+
+fn run_to_completion<S: Scheduler>(
+    cluster: Cluster,
+    scheduler: S,
+    resource_manager: ResourceManager,
+    jobs: Vec<Job>,
+    jobs_total: usize,
+) -> SimulationMetrics {
+    let mut engine = SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager);
     engine.submit_jobs(jobs);
     engine.run();
-
-    Ok(SimulationMetrics::from_cluster(&engine.cluster, jobs_total))
+    SimulationMetrics::from_cluster(&engine.cluster, jobs_total)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # M6 — Forge scheduler features (scoping)
 
-Status: quotas done; priority, gang plugin parity, and preemption still
+Status: quotas and priority done; gang plugin parity and preemption still
 planned. This is a design scope, not a full implementation plan for the
 remaining pieces — flags open questions to resolve before writing code.
 Same format as [M5's scoping doc](m5_topology.md).
@@ -27,10 +27,22 @@ together — recommend separate PRs in the order below.
   (`crates/forgesim-config/tests/integration.rs`), which proves two
   same-tenant jobs that *could* run concurrently on the raw GPU count
   instead serialize under a tight quota.
-- **Priority**: `Job.priority: u32` is parsed from `spec.priority` and
-  stored, but `PriorityScheduler` is a stub that logs "not implemented" and
-  returns no placements (`crates/forgesim-scheduler/src/stubs.rs`). Only
-  `FifoScheduler` (arrival-time order) is real.
+- **Priority — done.** `PriorityScheduler` (`crates/forgesim-scheduler/src/priority.rs`)
+  sorts the waiting queue by `(priority desc, arrival_time asc)` via
+  `Cluster::sort_waiting_by_priority`, then places jobs through the same
+  `place_in_order` helper `FifoScheduler` now also shares
+  (`crates/forgesim-scheduler/src/common.rs` — factored out since the two
+  schedulers differed only in sort order). It does *not* preempt: a job
+  already running when a higher-priority one arrives keeps running: the
+  new job only wins the *next* scheduling decision, which is exactly the
+  gap preemption (below) is meant to close. Selectable via
+  `scheduler.type: priority` in internal YAML configs and
+  `--scheduler priority` on `forge-sim run --forge-bundle` /
+  `forge-sim replay`. Covered by unit tests in `priority.rs`/`cluster.rs`
+  and `integration_priority_scheduler_prefers_high_priority_job`
+  (`crates/forgesim-config/tests/integration.rs`), which runs the same
+  workload under both policies and shows priority achieves a lower mean
+  wait time for identical total makespan.
 - **Gang scheduling**: `gang_enabled` / `gang_size_nodes` are parsed from
   Forge annotations and stored on `Job`, and gang jobs already get the
   correct total GPU count (`nodes × gpusPerNode`, M2). But nothing reads
@@ -86,10 +98,7 @@ together — recommend separate PRs in the order below.
 ## Suggested order
 
 1. ~~**Quotas**~~ — done, see above.
-2. **Priority scheduler** — implement `PriorityScheduler` for real: sort
-   `waiting_queue` by `(priority desc, arrival_time asc)` instead of
-   `FifoScheduler`'s arrival-only sort. Almost a copy of `fifo.rs` with a
-   different sort key — low risk.
+2. ~~**Priority scheduler**~~ — done, see above.
 3. **Gang plugin parity** — blocked on open question 1. Until that's
    answered, no code to write here beyond what M2 already did.
 4. **Preemption** — largest, touches the engine (`try_schedule` needs a

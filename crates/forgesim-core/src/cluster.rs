@@ -146,6 +146,17 @@ impl Cluster {
                 .unwrap_or(Ordering::Equal)
         });
     }
+
+    /// Higher `priority` first; ties broken by earlier `arrival_time`.
+    pub fn sort_waiting_by_priority(&mut self) {
+        self.waiting_queue.sort_by(|a, b| {
+            b.priority.cmp(&a.priority).then_with(|| {
+                a.arrival_time
+                    .partial_cmp(&b.arrival_time)
+                    .unwrap_or(Ordering::Equal)
+            })
+        });
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +192,38 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn sort_waiting_by_priority_orders_high_priority_first() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut low = Job::new("j1", "low", 0.0, 10.0, 1);
+        low.priority = 10;
+        let mut high = Job::new("j2", "high", 5.0, 10.0, 1);
+        high.priority = 90;
+        cluster.enqueue_job(low);
+        cluster.enqueue_job(high);
+
+        cluster.sort_waiting_by_priority();
+
+        assert_eq!(cluster.waiting_queue[0].id, "j2");
+        assert_eq!(cluster.waiting_queue[1].id, "j1");
+    }
+
+    #[test]
+    fn sort_waiting_by_priority_breaks_ties_by_arrival() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut later = Job::new("j1", "later", 5.0, 10.0, 1);
+        later.priority = 50;
+        let mut earlier = Job::new("j2", "earlier", 0.0, 10.0, 1);
+        earlier.priority = 50;
+        cluster.enqueue_job(later);
+        cluster.enqueue_job(earlier);
+
+        cluster.sort_waiting_by_priority();
+
+        assert_eq!(cluster.waiting_queue[0].id, "j2");
+        assert_eq!(cluster.waiting_queue[1].id, "j1");
     }
 
     #[test]

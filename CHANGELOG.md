@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Internal YAML configs can set the same limits via
   `cluster.tenant_quotas`. See `docs/forge_input.md` and
   `docs/design/m6_scheduler_features.md`.
+- M6 (priority scheduler slice): `PriorityScheduler` now really schedules
+  (previously a no-op stub) — orders the waiting queue by highest
+  `priority` first, ties broken by earliest arrival. Select it with
+  `scheduler.type: priority` in internal YAML configs or `--scheduler
+  priority` on `forge-sim run --forge-bundle` / `forge-sim replay`. Does
+  not preempt already-running jobs.
 
 ## [0.1.0] — M1–M4
 
