@@ -21,6 +21,8 @@ macro_rules! stub_scheduler {
     };
 }
 
-stub_scheduler!(PriorityScheduler, "not implemented — milestone 4");
 stub_scheduler!(BestFitScheduler, "not implemented — milestone 2");
-stub_scheduler!(ForgeScheduler, "not implemented — milestone 4");
+stub_scheduler!(
+    ForgeScheduler,
+    "not implemented — milestone 6, blocked on Forge gang plugin spec"
+);

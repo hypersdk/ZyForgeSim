@@ -36,6 +36,9 @@ enum Commands {
         /// MIG partition profiles directory
         #[arg(long, default_value = "configs/mig")]
         mig_profiles_dir: PathBuf,
+        /// Scheduler policy to simulate (with --forge-bundle; --config uses its own scheduler.type)
+        #[arg(long, default_value = "fifo")]
+        scheduler: String,
         /// Write metrics JSON to this path
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -146,6 +149,7 @@ fn main() {
             gpu_type_registry,
             hardware_profiles_dir,
             mig_profiles_dir,
+            scheduler,
             output,
         } => {
             let metrics = if let Some(bundle) = forge_bundle {
@@ -155,6 +159,7 @@ fn main() {
                     &gpu_type_registry,
                     &hardware_profiles_dir,
                     &mig_profiles_dir,
+                    &scheduler,
                 )
             } else if let Some(config) = config {
                 run_simulation(&config)

@@ -5,10 +5,10 @@ use std::fs;
 use std::path::Path;
 
 use forgesim_core::cluster::Cluster;
-use forgesim_core::engine::SimulationEngine;
+use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::Job;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::FifoScheduler;
+use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -296,8 +296,9 @@ pub fn run_trace_replay(
     let oracle = oracle_placements_from_trace(events, &cluster)?;
     let jobs_total = jobs.len();
 
-    let mut engine = match scheduler {
-        "fifo" => SimulationEngine::new(cluster, FifoScheduler),
+    let (metrics, cluster) = match scheduler {
+        "fifo" => run_and_finish(cluster, FifoScheduler, jobs, jobs_total),
+        "priority" => run_and_finish(cluster, PriorityScheduler, jobs, jobs_total),
         other => {
             return Err(ConfigError::Invalid(format!(
                 "unsupported scheduler type '{other}' for trace replay"
@@ -305,14 +306,23 @@ pub fn run_trace_replay(
         }
     };
 
-    engine.submit_jobs(jobs);
-    engine.run();
-
-    let metrics = SimulationMetrics::from_cluster(&engine.cluster, jobs_total);
-    let simulated = simulated_placements(&engine.cluster);
+    let simulated = simulated_placements(&cluster);
     let report = compare_schedules(&oracle, &simulated, scheduler, metrics);
 
     Ok(TraceReplayResult { report })
+}
+
+fn run_and_finish<S: Scheduler>(
+    cluster: Cluster,
+    scheduler: S,
+    jobs: Vec<Job>,
+    jobs_total: usize,
+) -> (SimulationMetrics, Cluster) {
+    let mut engine = SimulationEngine::new(cluster, scheduler);
+    engine.submit_jobs(jobs);
+    engine.run();
+    let metrics = SimulationMetrics::from_cluster(&engine.cluster, jobs_total);
+    (metrics, engine.cluster)
 }
 
 pub fn run_trace_file(

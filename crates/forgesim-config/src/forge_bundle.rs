@@ -5,11 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use forgesim_core::cluster::Cluster;
-use forgesim_core::engine::SimulationEngine;
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
 use forgesim_metrics::SimulationMetrics;
-use forgesim_scheduler::FifoScheduler;
+use forgesim_scheduler::{FifoScheduler, PriorityScheduler};
 use serde::Deserialize;
 use serde_yaml::Value;
 
@@ -435,6 +434,7 @@ pub fn run_forge_bundle(
     gpu_registry_path: &Path,
     hardware_profiles_dir: &Path,
     mig_profiles_dir: &Path,
+    scheduler: &str,
 ) -> ConfigResult<SimulationMetrics> {
     let bundle = load_forge_bundle(
         bundle_dir,
@@ -464,11 +464,28 @@ pub fn run_forge_bundle(
         Some(registry) => ResourceManager::with_mig(registry),
         None => ResourceManager::new(),
     };
-    let mut engine =
-        SimulationEngine::with_resource_manager(bundle.cluster, FifoScheduler, resource_manager);
-    engine.submit_jobs(bundle.jobs);
-    engine.run();
-    Ok(SimulationMetrics::from_cluster(&engine.cluster, jobs_total))
+    let metrics = match scheduler {
+        "fifo" => crate::run_to_completion(
+            bundle.cluster,
+            FifoScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        "priority" => crate::run_to_completion(
+            bundle.cluster,
+            PriorityScheduler,
+            resource_manager,
+            bundle.jobs,
+            jobs_total,
+        ),
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "unsupported scheduler type '{other}'"
+            )));
+        }
+    };
+    Ok(metrics)
 }
 
 #[cfg(test)]
@@ -538,7 +555,7 @@ mod tests {
         let hw = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/hardware");
         let mig = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/mig");
 
-        let metrics = run_forge_bundle(&root, &profiles, &registry, &hw, &mig).unwrap();
+        let metrics = run_forge_bundle(&root, &profiles, &registry, &hw, &mig, "fifo").unwrap();
         assert_eq!(metrics.jobs_completed, metrics.jobs_total);
         assert!(metrics.jobs_total >= 2);
     }

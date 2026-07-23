@@ -25,6 +25,29 @@ fn integration_synthetic_m1_workload_completes() {
 }
 
 #[test]
+fn integration_priority_scheduler_prefers_high_priority_job() {
+    let fifo_config = repo_root().join("configs/clusters/priority_fifo.yaml");
+    let priority_config = repo_root().join("configs/clusters/priority_scheduler.yaml");
+    if !fifo_config.exists() || !priority_config.exists() {
+        return;
+    }
+    // Same workload (a filler job occupies the only GPU while a low- and a
+    // high-priority job both arrive and queue up behind it), run under each
+    // scheduler policy. Total work done is identical either way, so
+    // makespan doesn't distinguish them — but mean_wait_time does: the
+    // priority scheduler runs the high-priority job first once the GPU
+    // frees up, so on average jobs wait less than under strict FIFO, which
+    // runs the earlier-arriving low-priority job first.
+    let fifo_metrics = run_simulation(&fifo_config).expect("fifo simulation");
+    let priority_metrics = run_simulation(&priority_config).expect("priority simulation");
+
+    assert_eq!(fifo_metrics.jobs_completed, fifo_metrics.jobs_total);
+    assert_eq!(priority_metrics.jobs_completed, priority_metrics.jobs_total);
+    assert_eq!(fifo_metrics.makespan, priority_metrics.makespan);
+    assert!(priority_metrics.mean_wait_time < fifo_metrics.mean_wait_time);
+}
+
+#[test]
 fn integration_forge_bundle_fifo_simulation() {
     let bundle = repo_root().join("tests/fixtures/forge");
     if !bundle.exists() {
@@ -36,6 +59,7 @@ fn integration_forge_bundle_fifo_simulation() {
         &repo_root().join("configs/gpu_type_registry.yaml"),
         &repo_root().join("configs/hardware"),
         &repo_root().join("configs/mig"),
+        "fifo",
     )
     .expect("forge bundle simulation");
     assert_eq!(metrics.jobs_completed, metrics.jobs_total);
@@ -89,6 +113,7 @@ fn integration_forge_bundle_quota_delays_second_job() {
         &repo_root().join("configs/gpu_type_registry.yaml"),
         &repo_root().join("configs/hardware"),
         &repo_root().join("configs/mig"),
+        "fifo",
     )
     .expect("forge bundle simulation");
     assert_eq!(metrics.jobs_completed, 2);

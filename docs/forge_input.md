@@ -105,6 +105,16 @@ only serializes jobs *within* a tenant — it never blocks or reorders other
 tenants' jobs. Internal YAML configs can set the same limits directly via
 `cluster.tenant_quotas: { <tenant>: <maxGPUs> }`.
 
+## Priority scheduling (M6)
+
+`spec.priority` (0–100, mapped to `Job.priority`) can drive placement order
+instead of arrival time: pass `--scheduler priority` to `forge-sim run
+--forge-bundle` or `forge-sim replay`, or set `scheduler.type: priority` in
+an internal YAML config. The priority scheduler orders the waiting queue by
+highest priority first, breaking ties by earliest arrival — but it does not
+preempt jobs already running, so a low-priority job that started before a
+high-priority one arrived keeps running to completion.
+
 ## Calibrated profiles
 
 Runtime and memory are **not** in Forge CRDs. They come from [`configs/profiles/`](../configs/profiles/):
