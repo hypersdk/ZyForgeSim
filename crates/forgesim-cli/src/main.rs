@@ -87,6 +87,9 @@ fn print_metrics(metrics: forgesim_metrics::SimulationMetrics, output: Option<Pa
     if metrics.mig_reconfigs > 0 {
         println!("  mig reconfigs:     {}", metrics.mig_reconfigs);
     }
+    if metrics.preemptions > 0 {
+        println!("  preemptions:       {}", metrics.preemptions);
+    }
 
     let json = metrics.to_json_pretty();
     let out = output.unwrap_or_else(|| PathBuf::from("outputs/metrics.json"));

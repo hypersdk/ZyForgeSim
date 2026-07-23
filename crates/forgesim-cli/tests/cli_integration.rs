@@ -121,6 +121,26 @@ fn cli_run_forge_bundle_with_priority_scheduler_completes() {
 }
 
 #[test]
+fn cli_run_internal_config_with_preemptive_scheduler_reports_preemptions() {
+    let config = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !config.exists() {
+        return;
+    }
+    let output = forge_sim()
+        .args(["run", "--config", config.to_str().expect("utf8 path")])
+        .output()
+        .expect("spawn forge-sim");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("jobs completed"));
+    assert!(stdout.contains("preemptions:"));
+}
+
+#[test]
 fn cli_run_forge_bundle_with_unknown_scheduler_fails() {
     let bundle = repo_root().join("tests/fixtures/forge");
     if !bundle.exists() {

@@ -11,6 +11,8 @@ pub struct SimulationMetrics {
     pub queue_max_length: usize,
     #[serde(default)]
     pub mig_reconfigs: u32,
+    #[serde(default)]
+    pub preemptions: u32,
 }
 
 impl SimulationMetrics {
@@ -46,6 +48,7 @@ impl SimulationMetrics {
             jobs_total,
             queue_max_length: 0,
             mig_reconfigs: cluster.mig_reconfigs,
+            preemptions: cluster.total_preemptions,
         }
     }
 
