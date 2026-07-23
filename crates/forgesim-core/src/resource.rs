@@ -21,10 +21,24 @@ impl ResourceManager {
     }
 
     pub fn can_place(&self, cluster: &Cluster, job: &Job) -> bool {
+        if !self.within_tenant_quota(cluster, job) {
+            return false;
+        }
         if job.is_mig_job() {
             return self.can_place_mig(cluster, job);
         }
         self.can_place_whole_gpu(cluster, job)
+    }
+
+    /// Tenants without a quota entry are unrestricted.
+    fn within_tenant_quota(&self, cluster: &Cluster, job: &Job) -> bool {
+        let Some(tenant) = job.tenant.as_deref() else {
+            return true;
+        };
+        let Some(&quota) = cluster.tenant_quotas.get(tenant) else {
+            return true;
+        };
+        cluster.tenant_gpu_usage(tenant) + job.gpu_count <= quota
     }
 
     pub fn allocate(
@@ -294,6 +308,63 @@ mod tests {
         assert!(rm.can_place(&cluster, &job));
         let p = rm.allocate(&mut cluster.clone(), &job, 0.0).unwrap();
         assert_eq!(p.gpu_ids.len(), 2);
+    }
+
+    fn two_gpu_cluster() -> Cluster {
+        Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![
+                Gpu::new("g0", "n0", "H100", 80.0),
+                Gpu::new("g1", "n0", "H100", 80.0),
+            ],
+        }])
+    }
+
+    #[test]
+    fn quota_blocks_job_that_would_exceed_tenant_limit() {
+        let mut cluster = two_gpu_cluster();
+        cluster.tenant_quotas.insert("acme".into(), 1);
+        let rm = ResourceManager::new();
+
+        let mut job = Job::new("j1", "big", 0.0, 10.0, 2);
+        job.tenant = Some("acme".into());
+        assert!(!rm.can_place(&cluster, &job));
+    }
+
+    #[test]
+    fn quota_allows_job_within_tenant_limit() {
+        let mut cluster = two_gpu_cluster();
+        cluster.tenant_quotas.insert("acme".into(), 2);
+        let rm = ResourceManager::new();
+
+        let mut job = Job::new("j1", "big", 0.0, 10.0, 2);
+        job.tenant = Some("acme".into());
+        assert!(rm.can_place(&cluster, &job));
+    }
+
+    #[test]
+    fn quota_accounts_for_already_running_jobs() {
+        let mut cluster = two_gpu_cluster();
+        cluster.tenant_quotas.insert("acme".into(), 1);
+        let mut running = Job::new("j0", "running", 0.0, 10.0, 1);
+        running.tenant = Some("acme".into());
+        cluster.start_job(running, &["g0".into()], 0.0);
+
+        let rm = ResourceManager::new();
+        let mut job = Job::new("j1", "second", 0.0, 10.0, 1);
+        job.tenant = Some("acme".into());
+        assert!(!rm.can_place(&cluster, &job));
+    }
+
+    #[test]
+    fn tenant_without_quota_entry_is_unrestricted() {
+        let mut cluster = two_gpu_cluster();
+        cluster.tenant_quotas.insert("other-team".into(), 1);
+        let rm = ResourceManager::new();
+
+        let mut job = Job::new("j1", "big", 0.0, 10.0, 2);
+        job.tenant = Some("acme".into());
+        assert!(rm.can_place(&cluster, &job));
     }
 
     #[test]

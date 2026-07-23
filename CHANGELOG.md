@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI workflows for Rust (`fmt`, `clippy`, unit + integration tests) and
   Python (`maturin build` + `unittest`).
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `rust-toolchain.toml`.
+- M6 (quotas slice): `FabricQuota.spec.gpuQuota.maxGPUs` is now enforced
+  per tenant at placement time — a job that would push its tenant over
+  quota stays queued until another of that tenant's jobs frees capacity.
+  Internal YAML configs can set the same limits via
+  `cluster.tenant_quotas`. See `docs/forge_input.md` and
+  `docs/design/m6_scheduler_features.md`.
 
 ## [0.1.0] — M1–M4
 

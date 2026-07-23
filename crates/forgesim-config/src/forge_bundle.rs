@@ -140,6 +140,29 @@ fn parse_fabric_quotas(dir: &Path) -> ConfigResult<Vec<Value>> {
     Ok(quotas)
 }
 
+fn parse_tenant_quotas(quotas: &[Value]) -> HashMap<String, u32> {
+    let mut result = HashMap::new();
+    for quota in quotas {
+        let Some(team) = quota
+            .get("spec")
+            .and_then(|s| s.get("team"))
+            .and_then(|t| t.as_str())
+        else {
+            continue;
+        };
+        let Some(max_gpus) = quota
+            .get("spec")
+            .and_then(|s| s.get("gpuQuota"))
+            .and_then(|q| q.get("maxGPUs"))
+            .and_then(|m| m.as_i64())
+        else {
+            continue;
+        };
+        result.insert(team.to_string(), max_gpus as u32);
+    }
+    result
+}
+
 fn resolve_tenant(namespace: &str, quotas: &[Value]) -> Option<String> {
     for quota in quotas {
         let spec = quota.get("spec")?;
@@ -400,7 +423,8 @@ pub fn load_forge_bundle(
         ));
     }
 
-    let cluster = parse_fabric_gpu_nodes(&cluster_dir, &gpu_registry, &hw_profiles)?;
+    let mut cluster = parse_fabric_gpu_nodes(&cluster_dir, &gpu_registry, &hw_profiles)?;
+    cluster.tenant_quotas = parse_tenant_quotas(&quotas);
 
     Ok(ForgeBundle { jobs, cluster })
 }

@@ -95,6 +95,16 @@ spec:
 
 **GPU count rule:** When `spec.distributed.enabled` is true, total GPUs = `nodes × gpusPerNode` (gang example: 4×8 = **32**, not `spec.gpus` alone).
 
+## Tenant GPU quotas (M6)
+
+`FabricQuota.spec.gpuQuota.maxGPUs` is enforced at placement time: a job
+whose tenant already holds `maxGPUs` GPUs across running jobs stays queued
+until one of that tenant's jobs finishes and frees capacity. Tenants with
+no matching `FabricQuota` (or no `gpuQuota.maxGPUs`) are unrestricted. This
+only serializes jobs *within* a tenant — it never blocks or reorders other
+tenants' jobs. Internal YAML configs can set the same limits directly via
+`cluster.tenant_quotas: { <tenant>: <maxGPUs> }`.
+
 ## Calibrated profiles
 
 Runtime and memory are **not** in Forge CRDs. They come from [`configs/profiles/`](../configs/profiles/):

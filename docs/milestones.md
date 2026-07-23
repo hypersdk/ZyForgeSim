@@ -7,7 +7,7 @@
 | **M3 — Trace replay** | Done | Scheduler event JSONL replay + oracle vs FIFO diff report |
 | **M4 — MIG simulation** | Done | MIG slice partition/reconfig with simulated delay |
 | **M5 — Topology** | [Scoped](design/m5_topology.md) | NVLink/PCIe graph from FabricGpuNode topology |
-| **M6 — Forge scheduler features** | [Scoped](design/m6_scheduler_features.md) | Quotas enforced, priority, gang plugin parity, preemption |
+| **M6 — Forge scheduler features** | In progress ([scope](design/m6_scheduler_features.md)) | Quotas enforced (done), priority, gang plugin parity, preemption |
 | **M7 — RL** | Planned | Gymnasium wrapper, PPO baselines |
 | **M8 — Visualization** | Planned | Gantt, heatmaps, notebooks |
 
@@ -71,3 +71,12 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 - [x] Reconfiguration delay simulated (`reconfig_seconds: 30`)
 - [x] `mig_reconfigs` tracked in metrics output
 - [x] Forge `spec.mig.profile/count` mapped at ingest (M2) and simulated (M4)
+
+## M6 progress
+
+- [x] Quotas: `FabricQuota.spec.gpuQuota.maxGPUs` enforced per tenant at
+      placement time (see `docs/forge_input.md` "Tenant GPU quotas")
+- [ ] Priority scheduler
+- [ ] Gang plugin parity (blocked on a spec for Forge's `ForgeGang` plugin
+      behavior — see `design/m6_scheduler_features.md`)
+- [ ] Preemption

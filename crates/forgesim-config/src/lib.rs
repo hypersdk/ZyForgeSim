@@ -73,6 +73,8 @@ pub struct NodeSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClusterConfig {
     pub nodes: Vec<NodeSpec>,
+    #[serde(default)]
+    pub tenant_quotas: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -208,7 +210,9 @@ pub fn build_cluster(
             gpus,
         });
     }
-    Ok(Cluster::new(nodes))
+    let mut cluster = Cluster::new(nodes);
+    cluster.tenant_quotas = cluster_cfg.tenant_quotas.clone();
+    Ok(cluster)
 }
 
 pub fn resolve_path(base: &Path, relative: &str) -> PathBuf {

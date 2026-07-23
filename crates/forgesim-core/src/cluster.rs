@@ -11,6 +11,9 @@ pub struct Cluster {
     pub finished_jobs: Vec<Job>,
     pub clock: f64,
     pub mig_reconfigs: u32,
+    /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
+    /// Tenants with no entry are unrestricted.
+    pub tenant_quotas: HashMap<String, u32>,
 }
 
 impl Cluster {
@@ -22,7 +25,17 @@ impl Cluster {
             finished_jobs: Vec::new(),
             clock: 0.0,
             mig_reconfigs: 0,
+            tenant_quotas: HashMap::new(),
         }
+    }
+
+    /// GPUs currently held by `tenant` across its running jobs.
+    pub fn tenant_gpu_usage(&self, tenant: &str) -> u32 {
+        self.running_jobs
+            .values()
+            .filter(|j| j.tenant.as_deref() == Some(tenant))
+            .map(|j| j.gpu_count)
+            .sum()
     }
 
     pub fn all_gpus(&self) -> impl Iterator<Item = &Gpu> {
@@ -168,6 +181,21 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn tenant_gpu_usage_sums_running_jobs_for_tenant() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut a = Job::new("j1", "a", 0.0, 10.0, 1);
+        a.tenant = Some("acme".into());
+        let mut b = Job::new("j2", "b", 0.0, 10.0, 1);
+        b.tenant = Some("other".into());
+        cluster.start_job(a, &["gpu-0".into()], 0.0);
+        cluster.start_job(b, &["gpu-1".into()], 0.0);
+
+        assert_eq!(cluster.tenant_gpu_usage("acme"), 1);
+        assert_eq!(cluster.tenant_gpu_usage("other"), 1);
+        assert_eq!(cluster.tenant_gpu_usage("nobody"), 0);
     }
 
     #[test]
