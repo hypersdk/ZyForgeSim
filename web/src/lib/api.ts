@@ -10,62 +10,68 @@ import type {
 
 const API = "/api";
 
+function redirectToLogin() {
+  if (typeof window !== "undefined") {
+    const next = encodeURIComponent(window.location.pathname);
+    window.location.href = `/login?next=${next}`;
+  }
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) {
+    throw new Error(`request failed: ${path}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function fetchConfigs(): Promise<ConfigEntry[]> {
-  const res = await fetch(`${API}/configs`);
-  if (!res.ok) throw new Error("failed to load configs");
-  return res.json();
+  return apiFetch<ConfigEntry[]>("/configs");
 }
 
 export async function fetchRuns(): Promise<RunSummary[]> {
-  const res = await fetch(`${API}/runs`);
-  if (!res.ok) throw new Error("failed to load runs");
-  return res.json();
+  return apiFetch<RunSummary[]>("/runs");
 }
 
 export async function startRun(config: string): Promise<{ id: string }> {
-  const res = await fetch(`${API}/runs`, {
+  return apiFetch<{ id: string }>("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config }),
   });
-  if (!res.ok) throw new Error("failed to start run");
-  return res.json();
 }
 
 export async function fetchRun(id: string): Promise<RunDetail> {
-  const res = await fetch(`${API}/runs/${id}`);
-  if (!res.ok) throw new Error("run not found");
-  return res.json();
+  return apiFetch<RunDetail>(`/runs/${id}`);
 }
 
 export async function fetchTimeline(id: string): Promise<JobsTimeline> {
-  const res = await fetch(`${API}/runs/${id}/timeline`);
-  if (!res.ok) throw new Error("timeline not ready");
-  return res.json();
+  return apiFetch<JobsTimeline>(`/runs/${id}/timeline`);
 }
 
 export async function fetchEvents(id: string): Promise<SchedulerDecision[]> {
-  const res = await fetch(`${API}/runs/${id}/events`);
-  if (!res.ok) throw new Error("events not ready");
-  return res.json();
+  return apiFetch<SchedulerDecision[]>(`/runs/${id}/events`);
 }
 
 export async function fetchSnapshots(id: string): Promise<ClusterSnapshot[]> {
-  const res = await fetch(`${API}/runs/${id}/snapshots`);
-  if (!res.ok) throw new Error("snapshots not ready");
-  return res.json();
+  return apiFetch<ClusterSnapshot[]>(`/runs/${id}/snapshots`);
 }
 
 export async function compareConfigs(configs: string[]): Promise<{
   results: Array<{ config: string; status: string; metrics: SimulationMetrics | null; run_id: string }>;
 }> {
-  const res = await fetch(`${API}/compare`, {
+  return apiFetch("/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ configs }),
   });
-  if (!res.ok) throw new Error("compare failed");
-  return res.json();
 }
 
 export function pollRun(id: string, onUpdate: (run: RunDetail) => void, intervalMs = 1000): () => void {
@@ -77,7 +83,7 @@ export function pollRun(id: string, onUpdate: (run: RunDetail) => void, interval
         onUpdate(run);
         if (run.status === "completed" || run.status === "failed") break;
       } catch {
-        /* retry */
+        /* retry unless unauthorized redirect */
       }
       await new Promise((r) => setTimeout(r, intervalMs));
     }

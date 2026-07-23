@@ -19,6 +19,15 @@ ensure_web_deps "$ROOT/web"
 
 export PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
 
+# Dashboard login — force local defaults unless FORGESIM_AUTH_CUSTOM=1 is set.
+if [[ -z "${FORGESIM_AUTH_CUSTOM:-}" ]]; then
+  export FORGESIM_DASHBOARD_USER="Admin"
+  export FORGESIM_DASHBOARD_PASSWORD="Admin@321"
+else
+  export FORGESIM_DASHBOARD_USER="${FORGESIM_DASHBOARD_USER:-Admin}"
+  export FORGESIM_DASHBOARD_PASSWORD="${FORGESIM_DASHBOARD_PASSWORD:-Admin@321}"
+fi
+
 cleanup() {
   if [[ -n "${API_PID:-}" ]] && kill -0 "$API_PID" 2>/dev/null; then
     kill "$API_PID" 2>/dev/null || true
@@ -30,6 +39,7 @@ trap cleanup EXIT INT TERM
 echo "Starting ForgeSim web dashboard..."
 echo "  API: http://127.0.0.1:${API_PORT}"
 echo "  UI:  http://127.0.0.1:${UI_PORT}"
+echo "  Login: ${FORGESIM_DASHBOARD_USER} / ${FORGESIM_DASHBOARD_PASSWORD}"
 echo
 echo "Press Ctrl+C to stop both servers."
 echo

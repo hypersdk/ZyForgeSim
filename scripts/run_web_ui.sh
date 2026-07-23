@@ -9,6 +9,14 @@ source "$ROOT/scripts/common.sh"
 WEB="$ROOT/web"
 PORT="${PORT:-3000}"
 
+if [[ -z "${FORGESIM_AUTH_CUSTOM:-}" ]]; then
+  export FORGESIM_DASHBOARD_USER="Admin"
+  export FORGESIM_DASHBOARD_PASSWORD="Admin@321"
+else
+  export FORGESIM_DASHBOARD_USER="${FORGESIM_DASHBOARD_USER:-Admin}"
+  export FORGESIM_DASHBOARD_PASSWORD="${FORGESIM_DASHBOARD_PASSWORD:-Admin@321}"
+fi
+
 ensure_web_deps "$WEB"
 
 echo "ForgeSim web UI → http://127.0.0.1:${PORT}"
