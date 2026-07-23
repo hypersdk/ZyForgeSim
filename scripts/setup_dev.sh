@@ -5,30 +5,227 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PYTHON="${PYTHON:-python3.13}"
-if ! command -v "$PYTHON" >/dev/null 2>&1; then
-  PYTHON=python3
+VENV="$ROOT/.venv"
+PY="$VENV/bin/python"
+GET_PIP="$ROOT/scripts/get-pip.py"
+
+# Homebrew python@3.13 often links pyexpat against Homebrew expat, but the
+# dynamic loader picks /usr/lib/libexpat.1.dylib unless we prepend Homebrew's lib.
+fix_homebrew_pyexpat() {
+  if [[ -d /opt/homebrew/opt/expat/lib ]]; then
+    export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+  elif [[ -d /usr/local/opt/expat/lib ]]; then
+    export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+  fi
+}
+
+patch_activate() {
+  local activate="$VENV/bin/activate"
+  [[ -f "$activate" ]] || return 0
+  if ! grep -q "FORGESIM_DYLD_EXPAT" "$activate" 2>/dev/null; then
+    cat >>"$activate" <<'EOF'
+
+# ForgeSim: Homebrew python@3.13 pyexpat fix
+if [[ -d /opt/homebrew/opt/expat/lib ]]; then
+  export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+elif [[ -d /usr/local/opt/expat/lib ]]; then
+  export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 fi
+EOF
+  fi
+}
 
-echo "Using interpreter: $($PYTHON --version 2>&1)"
+choose_python() {
+  for candidate in "${PYTHON:-}" python3.13 python3.12 python3.11 python3; do
+    [[ -z "$candidate" ]] && continue
+    if command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+        echo "$candidate"
+        return 0
+      fi
+    fi
+  done
+  echo "No suitable python3 found (need >= 3.10)." >&2
+  exit 1
+}
 
-if [[ ! -d .venv ]]; then
-  echo "Creating .venv..."
-  "$PYTHON" -m venv .venv
-fi
+pyexpat_ok() {
+  local interpreter="$1"
+  "$interpreter" -c "import pyexpat" >/dev/null 2>&1
+}
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
+require_pyexpat() {
+  local interpreter="$1"
+  if pyexpat_ok "$interpreter"; then
+    return 0
+  fi
+  cat >&2 <<'EOF'
+Python pyexpat is still broken after applying Homebrew expat library path.
 
-python -m pip install --upgrade pip setuptools wheel maturin
-python -m pip install rich pyyaml
+Recommended fixes (pick one):
 
-# Build/install PyO3 extension into the venv (editable).
-maturin develop
+  1) Install uv and let setup use a standalone Python (easiest):
+       brew install uv
+       rm -rf .venv && USE_UV=1 ./scripts/setup_dev.sh
 
-echo
-echo "Dev environment ready. Activate with:"
-echo "  source .venv/bin/activate"
-echo
-echo "Run the live dashboard:"
-echo "  ./scripts/run_live_dashboard.sh --config configs/clusters/small_h100.yaml"
+  2) Use python.org installer (3.12+) instead of Homebrew python@3.13
+
+  3) Reinstall Homebrew Python linked against expat:
+       brew reinstall expat python@3.13
+       rm -rf .venv && ./scripts/setup_dev.sh
+EOF
+  exit 1
+}
+
+venv_has_pip() {
+  [[ -x "$PY" ]] && "$PY" -c "import pip" >/dev/null 2>&1
+}
+
+ensure_pip_shims() {
+  cat >"$VENV/bin/pip" <<'EOF'
+#!/usr/bin/env bash
+exec "$(dirname "$0")/python" -m pip "$@"
+EOF
+  chmod +x "$VENV/bin/pip"
+  ln -sf pip "$VENV/bin/pip3"
+}
+
+bootstrap_pip() {
+  if venv_has_pip; then
+    return 0
+  fi
+
+  echo "Bootstrapping pip into .venv..."
+
+  if command -v uv >/dev/null 2>&1; then
+    echo "Using uv to install pip..."
+    uv pip install --python "$PY" pip setuptools wheel
+    return 0
+  fi
+
+  if [[ ! -f "$GET_PIP" ]]; then
+    echo "Downloading get-pip.py..."
+    curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$GET_PIP"
+  fi
+
+  "$PY" "$GET_PIP" --no-setuptools --no-wheel
+  "$PY" -m pip install setuptools wheel
+}
+
+create_venv_with_uv() {
+  echo "Creating .venv with uv (standalone Python, avoids Homebrew pyexpat)..."
+  rm -rf "$VENV"
+  uv python install 3.12
+  uv venv --python 3.12 "$VENV"
+  patch_activate
+  uv pip install --python "$PY" pip setuptools wheel rich pyyaml maturin
+  ensure_pip_shims
+}
+
+create_venv() {
+  local base_python="$1"
+  echo "Creating fresh .venv (without bundled pip)..."
+  rm -rf "$VENV"
+  "$base_python" -m venv --without-pip "$VENV"
+  patch_activate
+  bootstrap_pip
+  ensure_pip_shims
+}
+
+ensure_venv() {
+  fix_homebrew_pyexpat
+
+  if [[ "${USE_UV:-}" == "1" ]] && command -v uv >/dev/null 2>&1; then
+    create_venv_with_uv
+    return 0
+  fi
+
+  local base_python
+  base_python="$(choose_python)"
+  echo "Using interpreter: $($base_python --version 2>&1)"
+
+  if ! pyexpat_ok "$base_python" && command -v uv >/dev/null 2>&1; then
+    echo "Homebrew pyexpat broken; falling back to uv-managed Python..." >&2
+    create_venv_with_uv
+    return 0
+  fi
+
+  require_pyexpat "$base_python"
+
+  if [[ ! -x "$PY" ]] || [[ ! -f "$VENV/bin/activate" ]] || ! venv_has_pip; then
+    create_venv "$base_python"
+  fi
+
+  require_pyexpat "$PY"
+  ensure_pip_shims
+  patch_activate
+
+  echo "Installing Python deps (rich, pyyaml, maturin)..."
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$PY" rich pyyaml maturin
+  else
+    "$PY" -m pip install rich pyyaml maturin
+  fi
+}
+
+find_maturin() {
+  if [[ -x "$VENV/bin/maturin" ]]; then
+    echo "$VENV/bin/maturin"
+  elif command -v maturin >/dev/null 2>&1; then
+    command -v maturin
+  else
+    return 1
+  fi
+}
+
+install_rust_extension() {
+  local maturin_bin
+  maturin_bin="$(find_maturin)" || {
+    echo "maturin not found after install." >&2
+    exit 1
+  }
+
+  echo "Building ForgeSim PyO3 extension with $maturin_bin ..."
+  export VIRTUAL_ENV="$VENV"
+  export PATH="$VENV/bin:$PATH"
+  fix_homebrew_pyexpat
+
+  if "$maturin_bin" develop; then
+    return 0
+  fi
+
+  echo "maturin develop failed; retrying with --skip-install + wheel install..." >&2
+  "$maturin_bin" develop --skip-install
+  WHEEL="$(ls -t "$ROOT"/target/wheels/forgesim-*.whl 2>/dev/null | head -1 || true)"
+  if [[ -z "$WHEEL" ]]; then
+    echo "No wheel produced under target/wheels/" >&2
+    exit 1
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python "$PY" --force-reinstall --no-deps "$WHEEL"
+  else
+    "$PY" -m pip install --force-reinstall --no-deps "$WHEEL"
+  fi
+}
+
+verify_install() {
+  fix_homebrew_pyexpat
+  export PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+  "$PY" -c "import forgesim._forgesim; import rich; print('OK: forgesim extension + rich')"
+}
+
+ensure_venv
+install_rust_extension
+verify_install
+
+cat <<EOF
+
+Dev environment ready.
+
+  source .venv/bin/activate
+  ./scripts/run_live_dashboard.sh --config configs/clusters/small_h100.yaml
+
+If pyexpat breaks again in a new shell, re-run:
+  source .venv/bin/activate
+
+EOF
