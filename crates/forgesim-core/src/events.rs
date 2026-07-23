@@ -5,6 +5,7 @@ use std::collections::BinaryHeap;
 pub enum EventKind {
     JobArrival,
     JobComplete,
+    GangTimeout,
 }
 
 #[derive(Debug, Clone)]

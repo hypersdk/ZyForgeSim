@@ -182,7 +182,12 @@ impl RlSession {
 
     fn apply_placement(&mut self, mut job: Job, placement: Placement) {
         job.run_generation += 1;
-        let duration = job.duration_remaining();
+        let duration = job.duration_remaining() * placement.runtime_multiplier;
+        if placement.runtime_multiplier > 1.0 {
+            let base = job.duration_remaining();
+            self.cluster.topology_runtime_inflation +=
+                base * (placement.runtime_multiplier - 1.0);
+        }
         let run_generation = job.run_generation;
         self.cluster
             .start_job(job.clone(), &placement.gpu_ids, placement.start_time);
@@ -263,6 +268,16 @@ impl RlSession {
                     .expect("arrival job must exist");
                 let mut job = self.pending_arrivals.remove(idx);
                 job.state = JobState::Waiting;
+                if job.gang_enabled {
+                    if let Some(timeout) = job.gang_timeout_secs.filter(|t| *t > 0.0) {
+                        self.event_queue.push(Event {
+                            time: job.arrival_time + timeout,
+                            kind: EventKind::GangTimeout,
+                            job_id: job.id.clone(),
+                            run_generation: 0,
+                        });
+                    }
+                }
                 self.cluster.enqueue_job(job);
             }
             EventKind::JobComplete => {
@@ -271,6 +286,16 @@ impl RlSession {
                     _ => return,
                 }
                 self.cluster.finish_job(&event.job_id, self.cluster.clock);
+            }
+            EventKind::GangTimeout => {
+                let still_waiting = self
+                    .cluster
+                    .waiting_queue
+                    .iter()
+                    .any(|j| j.id == event.job_id && j.state == JobState::Waiting);
+                if still_waiting {
+                    self.cluster.fail_waiting_job(&event.job_id, self.cluster.clock);
+                }
             }
         }
     }

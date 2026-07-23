@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 
 use forgesim_core::cluster::Cluster;
 use forgesim_core::models::{Gpu, Job, Node};
-use forgesim_core::resource::ResourceManager;
+use forgesim_core::topology::TopologyGraph;
 use forgesim_metrics::{JobsTimeline, SimulationMetrics};
-use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use serde_yaml::Value;
 
@@ -219,6 +218,20 @@ fn parse_arrival_time(meta: &Value) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn parse_duration_secs(raw: &str) -> Option<f64> {
+    let s = raw.trim();
+    if let Some(num) = s.strip_suffix('s') {
+        return num.parse().ok();
+    }
+    if let Some(num) = s.strip_suffix('m') {
+        return num.parse::<f64>().ok().map(|m| m * 60.0);
+    }
+    if let Some(num) = s.strip_suffix('h') {
+        return num.parse::<f64>().ok().map(|h| h * 3600.0);
+    }
+    s.parse().ok()
+}
+
 fn lookup_runtime(
     model: &str,
     gpu_type: &str,
@@ -275,6 +288,10 @@ pub fn parse_fabric_ai_job(
         .and_then(|a| a.get(Value::from("forge.ai/gang-size")))
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok());
+    let gang_timeout_secs = annotations
+        .and_then(|a| a.get(Value::from("forge.ai/gang-timeout")))
+        .and_then(|v| v.as_str())
+        .and_then(parse_duration_secs);
 
     let gpu_type = spec
         .get("gpuType")
@@ -327,6 +344,7 @@ pub fn parse_fabric_ai_job(
         namespace: Some(namespace),
         gang_enabled,
         gang_size_nodes,
+        gang_timeout_secs,
         mig_profile,
         mig_count,
         ..Job::new("", "", 0.0, 0.0, 0)
@@ -395,7 +413,23 @@ pub fn parse_fabric_gpu_nodes(
             "no FabricGpuNode documents found in cluster/".into(),
         ));
     }
-    Ok(Cluster::new(nodes))
+    let mut nvlink_bw: f64 = 900.0;
+    let mut pcie_bw: f64 = 64.0;
+    for node in &nodes {
+        for gpu in &node.gpus {
+            if let Some(profile) = hw_profiles.get(&gpu.profile) {
+                if let Some(v) = profile.nvlink_bw_gbs {
+                    nvlink_bw = nvlink_bw.max(v);
+                }
+                if let Some(v) = profile.pcie_bw_gbs {
+                    pcie_bw = pcie_bw.max(v);
+                }
+            }
+        }
+    }
+    let mut cluster = Cluster::new(nodes);
+    cluster.topology = TopologyGraph::from_profile_bandwidths(nvlink_bw, pcie_bw);
+    Ok(cluster)
 }
 
 pub fn load_forge_bundle(
@@ -472,38 +506,14 @@ pub fn run_forge_bundle_report(
             "forge bundle contains MIG jobs but no MIG profile registry is configured".into(),
         ));
     }
-    let resource_manager = match mig_registry {
-        Some(registry) => ResourceManager::with_mig(registry),
-        None => ResourceManager::new(),
-    };
-    let (cluster, metrics) = match scheduler {
-        "fifo" => crate::run_to_completion(
-            bundle.cluster,
-            FifoScheduler,
-            resource_manager,
-            bundle.jobs,
-            jobs_total,
-        ),
-        "priority" => crate::run_to_completion(
-            bundle.cluster,
-            PriorityScheduler,
-            resource_manager,
-            bundle.jobs,
-            jobs_total,
-        ),
-        "preemptive" => crate::run_to_completion(
-            bundle.cluster,
-            PreemptivePriorityScheduler,
-            resource_manager,
-            bundle.jobs,
-            jobs_total,
-        ),
-        other => {
-            return Err(ConfigError::Invalid(format!(
-                "unsupported scheduler type '{other}'"
-            )));
-        }
-    };
+    let resource_manager = crate::build_resource_manager(mig_registry, scheduler);
+    let (cluster, metrics) = crate::run_to_completion_with_policy(
+        bundle.cluster,
+        scheduler,
+        resource_manager,
+        bundle.jobs,
+        jobs_total,
+    )?;
     Ok(SimulationReport {
         metrics,
         timeline: JobsTimeline::from_cluster(&cluster),

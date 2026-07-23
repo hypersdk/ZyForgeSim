@@ -49,6 +49,8 @@ def fabric_ai_job_to_job(
     gang_enabled = annotations.get("forge.ai/gang-schedule") == "true"
     gang_size_raw = annotations.get("forge.ai/gang-size")
     gang_size_nodes = int(gang_size_raw) if gang_size_raw is not None else None
+    gang_timeout_raw = annotations.get("forge.ai/gang-timeout")
+    gang_timeout_secs = _parse_duration_secs(gang_timeout_raw) if gang_timeout_raw else None
 
     mig = spec.get("mig") or {}
     network = spec.get("network")
@@ -66,6 +68,7 @@ def fabric_ai_job_to_job(
         "network_bw_gbps": network_bw,
         "gang_enabled": gang_enabled,
         "gang_size_nodes": gang_size_nodes,
+        "gang_timeout_secs": gang_timeout_secs,
         "mig_profile": mig.get("profile"),
         "mig_count": mig.get("count"),
     }
@@ -76,3 +79,26 @@ def fabric_ai_job_to_job(
         job["gpu_memory_gb"] = gpu_memory_gb
 
     return job
+
+
+def _parse_duration_secs(raw: str) -> float | None:
+    s = raw.strip()
+    if s.endswith("s"):
+        try:
+            return float(s[:-1])
+        except ValueError:
+            return None
+    if s.endswith("m"):
+        try:
+            return float(s[:-1]) * 60.0
+        except ValueError:
+            return None
+    if s.endswith("h"):
+        try:
+            return float(s[:-1]) * 3600.0
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except ValueError:
+        return None

@@ -52,8 +52,14 @@ together — recommend separate PRs in the order below.
   to spread `gpu_count / gang_size_nodes` GPUs across each of
   `gang_size_nodes` distinct nodes (all-or-nothing). This matches a
   buildable subset of Forge gang semantics without the full ForgeGang plugin
-  spec. `ForgeScheduler` remains a stub — use `priority` or `preemptive`
-  schedulers; gang behavior is resource-layer, not scheduler-layer.
+  spec. `ForgeScheduler` aliases the preemptive priority policy; quotas,
+  gang spread, and topology are enforced by `ResourceManager`.
+- **Gang timeout — done.** `forge.ai/gang-timeout` / `gang_timeout_secs`
+  schedules a `GangTimeout` DES event at `arrival + timeout`. If the job is
+  still waiting (could not be placed as a gang), it transitions to
+  `JobState::Failed` and increments `SimulationMetrics.jobs_failed`. Covered
+  by `engine::tests::gang_timeout_fails_job_that_never_fits` and
+  `integration_gang_job_fails_when_gang_timeout_expires`.
 - **Preemption — done.** `PreemptivePriorityScheduler`
   (`crates/forgesim-scheduler/src/preemptive.rs`) extends priority ordering:
   a waiting job that can't currently fit may evict lower-priority running
@@ -126,6 +132,7 @@ together — recommend separate PRs in the order below.
 2. ~~**Priority scheduler**~~ — done, see above.
 3. ~~**Preemption**~~ — done, see above.
 4. ~~**Gang plugin parity**~~ — scoped and implemented as node-aware gang.
+5. ~~**Gang timeout**~~ — implemented via `GangTimeout` events + `jobs_failed`.
 
 ## Non-goals for M6
 

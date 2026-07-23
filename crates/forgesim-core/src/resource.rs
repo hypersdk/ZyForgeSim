@@ -4,20 +4,37 @@ use crate::mig::reconfigure_gpu;
 use crate::mig::MigProfileRegistry;
 use crate::models::{Job, Placement};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuSelectionPolicy {
+    #[default]
+    FirstFit,
+    BestFit,
+}
+
 #[derive(Debug)]
 pub struct ResourceManager {
     pub mig_registry: Option<MigProfileRegistry>,
+    gpu_selection: GpuSelectionPolicy,
 }
 
 impl ResourceManager {
     pub fn new() -> Self {
-        Self { mig_registry: None }
+        Self {
+            mig_registry: None,
+            gpu_selection: GpuSelectionPolicy::default(),
+        }
     }
 
     pub fn with_mig(registry: MigProfileRegistry) -> Self {
         Self {
             mig_registry: Some(registry),
+            gpu_selection: GpuSelectionPolicy::default(),
         }
+    }
+
+    pub fn with_gpu_selection(mut self, policy: GpuSelectionPolicy) -> Self {
+        self.gpu_selection = policy;
+        self
     }
 
     pub fn can_place(&self, cluster: &Cluster, job: &Job) -> bool {
@@ -83,7 +100,11 @@ impl ResourceManager {
         } else if wants_topology_aware(job) {
             select_gpus_topology_aware(cluster, job).expect("can_place implied selection")
         } else {
-            let ids = select_gpus_scatter(cluster, job).expect("can_place implied selection");
+            let ids = match self.gpu_selection {
+                GpuSelectionPolicy::FirstFit => select_gpus_scatter(cluster, job),
+                GpuSelectionPolicy::BestFit => select_gpus_best_fit(cluster, job),
+            }
+            .expect("can_place implied selection");
             (ids, false)
         };
 
@@ -91,10 +112,18 @@ impl ResourceManager {
             cluster.topology_penalties += 1;
         }
 
+        let runtime_multiplier = cluster.topology.runtime_multiplier(
+            cluster,
+            job,
+            &selected,
+            used_penalty,
+        );
+
         Ok(Placement {
             job_id: job.id.clone(),
             gpu_ids: selected,
             start_time,
+            runtime_multiplier,
         })
     }
 
@@ -202,6 +231,7 @@ impl ResourceManager {
             job_id: job.id.clone(),
             gpu_ids: selected,
             start_time: start_time + reconfig_delay,
+            runtime_multiplier: 1.0,
         })
     }
 
@@ -302,6 +332,56 @@ fn select_gpus_scatter(cluster: &Cluster, job: &Job) -> Option<Vec<String>> {
     None
 }
 
+/// Prefer the tightest single-node fit; otherwise pack from the fullest nodes first.
+fn select_gpus_best_fit(cluster: &Cluster, job: &Job) -> Option<Vec<String>> {
+    let free = eligible_free_gpus(cluster, job);
+    if free.len() < job.gpu_count as usize {
+        return None;
+    }
+
+    use std::collections::HashMap;
+    let mut by_node: HashMap<String, Vec<&crate::models::Gpu>> = HashMap::new();
+    for gpu in free {
+        by_node.entry(gpu.node_id.clone()).or_default().push(gpu);
+    }
+
+    let mut best_single: Option<(usize, Vec<String>)> = None;
+    for gpus in by_node.values() {
+        if gpus.len() < job.gpu_count as usize {
+            continue;
+        }
+        let slack = gpus.len() - job.gpu_count as usize;
+        let ids: Vec<String> = gpus
+            .iter()
+            .take(job.gpu_count as usize)
+            .map(|g| g.id.clone())
+            .collect();
+        if best_single
+            .as_ref()
+            .map(|(best_slack, _)| slack < *best_slack)
+            .unwrap_or(true)
+        {
+            best_single = Some((slack, ids));
+        }
+    }
+    if let Some((_, ids)) = best_single {
+        return Some(ids);
+    }
+
+    let mut nodes: Vec<_> = by_node.into_iter().collect();
+    nodes.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    let mut selected = Vec::with_capacity(job.gpu_count as usize);
+    for (_, gpus) in nodes {
+        for gpu in gpus {
+            selected.push(gpu.id.clone());
+            if selected.len() == job.gpu_count as usize {
+                return Some(selected);
+            }
+        }
+    }
+    None
+}
+
 /// Prefer placing all GPUs within one NVLink domain; fall back to scatter.
 fn select_gpus_topology_aware(cluster: &Cluster, job: &Job) -> Option<(Vec<String>, bool)> {
     let free = eligible_free_gpus(cluster, job);
@@ -346,6 +426,7 @@ mod tests {
     use crate::cluster::Cluster;
     use crate::mig::{MigHardwareConfig, MigProfileRegistry, MigProfileSpec};
     use crate::models::{Gpu, Node};
+    use crate::resource::GpuSelectionPolicy;
     use std::collections::HashMap;
 
     fn mig_registry() -> MigProfileRegistry {
@@ -647,5 +728,32 @@ mod tests {
         let placement = rm.allocate(&mut cluster, &job, 0.0).unwrap();
         assert_eq!(placement.gpu_ids.len(), 2);
         assert_eq!(cluster.topology_penalties, 1);
+    }
+
+    #[test]
+    fn best_fit_prefers_tighter_node() {
+        let mut cluster = Cluster::new(vec![
+            Node {
+                id: "wide".into(),
+                gpus: vec![
+                    Gpu::new("w0", "wide", "H100", 80.0),
+                    Gpu::new("w1", "wide", "H100", 80.0),
+                    Gpu::new("w2", "wide", "H100", 80.0),
+                    Gpu::new("w3", "wide", "H100", 80.0),
+                ],
+            },
+            Node {
+                id: "tight".into(),
+                gpus: vec![
+                    Gpu::new("t0", "tight", "H100", 80.0),
+                    Gpu::new("t1", "tight", "H100", 80.0),
+                ],
+            },
+        ]);
+        cluster.start_job(Job::new("block", "b", 0.0, 100.0, 1), &["w0".into()], 0.0);
+        let rm = ResourceManager::new().with_gpu_selection(GpuSelectionPolicy::BestFit);
+        let job = Job::new("j1", "pair", 0.0, 10.0, 2);
+        let placement = rm.allocate(&mut cluster, &job, 0.0).unwrap();
+        assert_eq!(placement.gpu_ids, vec!["t0", "t1"]);
     }
 }
