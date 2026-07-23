@@ -103,49 +103,32 @@ python python/examples/plot_run.py outputs/jobs.json
 
 ### Live CLI dashboard (Phase 1 UI)
 
-Rich terminal dashboard — cluster summary, GPU utilization bars, queue list:
-
-On macOS Homebrew Python, use the setup script if `venv` fails on `pyexpat`:
+Rich terminal dashboard — see **[docs/ui_dashboard.md](docs/ui_dashboard.md)** for full setup, scripts, and troubleshooting.
 
 ```bash
 ./scripts/setup_dev.sh
-source .venv/bin/activate
 ./scripts/run_live_dashboard.sh --config configs/clusters/small_h100.yaml
 ```
 
-Or manually:
-
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install maturin rich pyyaml
-maturin develop
-python python/examples/live_dashboard.py --config configs/clusters/small_h100.yaml
-```
-
-**Important:** use the venv Python (`source .venv/bin/activate`). System `python3` (e.g. 3.9) is too old and will not have the Rust extension installed.
-
 ### Web dashboard (Phase 2 UI)
 
-FastAPI backend + Next.js frontend — run simulations, replay scheduler decisions, compare configs:
+FastAPI + Next.js — see **[docs/ui_dashboard.md](docs/ui_dashboard.md)** for API reference and scripts.
 
 ```bash
-pip install -e '.[server]'
-uvicorn forgesim.server.app:app --reload --port 8080
-
-cd web && npm install && npm run dev
+./scripts/setup_dev.sh
+cd web && npm install && cd ..
+./scripts/run_web_dashboard.sh    # http://localhost:3000
 ```
 
-Open http://localhost:3000. See [web/README.md](web/README.md) and [docs/ui_roadmap.md](docs/ui_roadmap.md).
+Or run API and UI separately: `./scripts/run_web_api.sh` · `./scripts/run_web_ui.sh`
 
 ### Python + RL (M7)
 
 On macOS Homebrew Python, use the setup script if `venv` fails on `pyexpat`:
 
 ```bash
-./scripts/setup_venv.sh
+./scripts/setup_dev.sh
 source .venv/bin/activate
-maturin develop
 pip install -e '.[rl]'
 python python/examples/run_rl_env.py
 python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
@@ -172,12 +155,14 @@ PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 
 ```
 crates/              Rust workspace (core, scheduler, config, metrics, cli, py)
-python/forgesim/     Python package + adapters, envs, viz
+python/forgesim/     Python package + adapters, envs, viz, dashboard, server
+web/                 Next.js web dashboard
+scripts/             setup_dev.sh, run_live_dashboard.sh, run_web_*.sh
 configs/
   profiles/          Calibrated model runtimes (model + gpuType)
   hardware/          GPU capability profiles
 tests/fixtures/forge/  Golden Forge export bundle
-docs/                Architecture, milestones, Forge input mapping
+docs/                Architecture, milestones, UI dashboard guide
 ```
 
 ## Milestones

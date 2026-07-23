@@ -75,6 +75,8 @@ dashboard      │
 
 See [docs/ui_roadmap.md](ui_roadmap.md) for the full roadmap including Zyvor Forge integration.
 
+**User guide:** [docs/ui_dashboard.md](ui_dashboard.md) — setup scripts, CLI dashboard, web dashboard, API reference, troubleshooting.
+
 ## Design invariants
 
 - The Rust core never depends on Python or Gymnasium
