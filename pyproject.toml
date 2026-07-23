@@ -28,6 +28,7 @@ server = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "websockets>=13.0", "rich
 
 [project.scripts]
 forge-sim-py = "forgesim.cli:main"
+forge-sim-dashboard = "forgesim.dashboard.__main__:main"
 
 [tool.maturin]
 manifest-path = "crates/forgesim-py/Cargo.toml"

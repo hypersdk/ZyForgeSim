@@ -105,13 +105,25 @@ python python/examples/plot_run.py outputs/jobs.json
 
 Rich terminal dashboard — cluster summary, GPU utilization bars, queue list:
 
+On macOS Homebrew Python, use the setup script if `venv` fails on `pyexpat`:
+
 ```bash
-maturin develop
-pip install -e '.[dashboard]'
-python python/examples/live_dashboard.py --config configs/clusters/small_h100.yaml
-# or
-python -m forgesim.dashboard --config configs/clusters/small_h100.yaml
+./scripts/setup_dev.sh
+source .venv/bin/activate
+./scripts/run_live_dashboard.sh --config configs/clusters/small_h100.yaml
 ```
+
+Or manually:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install maturin rich pyyaml
+maturin develop
+python python/examples/live_dashboard.py --config configs/clusters/small_h100.yaml
+```
+
+**Important:** use the venv Python (`source .venv/bin/activate`). System `python3` (e.g. 3.9) is too old and will not have the Rust extension installed.
 
 ### Web dashboard (Phase 2 UI)
 
