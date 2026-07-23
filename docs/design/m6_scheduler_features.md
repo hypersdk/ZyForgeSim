@@ -1,8 +1,9 @@
 # M6 — Forge scheduler features (scoping)
 
-Status: quotas, priority, and preemption done; gang plugin parity still
-blocked (see open question below). Same format as
-[M5's scoping doc](m5_topology.md).
+Status: quotas, priority, preemption, and node-aware gang placement done.
+Gang is scoped to atomic multi-node spread (`gang_size_nodes` distinct nodes)
+rather than full ForgeGang plugin parity — see
+[`resource.rs`](../../crates/forgesim-core/src/resource.rs).
 
 M6 bundles four mostly-independent features from `docs/milestones.md`:
 quotas, priority, gang plugin parity, preemption. They don't need to land
@@ -42,16 +43,13 @@ together — recommend separate PRs in the order below.
   (`crates/forgesim-config/tests/integration.rs`), which runs the same
   workload under both policies and shows priority achieves a lower mean
   wait time for identical total makespan.
-- **Gang scheduling**: `gang_enabled` / `gang_size_nodes` are parsed from
-  Forge annotations and stored on `Job`, and gang jobs already get the
-  correct total GPU count (`nodes × gpusPerNode`, M2). But nothing reads
-  `gang_enabled`/`gang_size_nodes` after that — placement is "N total free
-  GPUs anywhere in the cluster," not "N GPUs arranged across the requested
-  node topology." Atomicity (all-or-nothing) is already implicit in
-  `ResourceManager::allocate`, so basic gang semantics *may* already be
-  sufficient depending on what "Forge gang plugin parity" needs to mean
-  (see open questions). `ForgeScheduler` is an empty stub with a stale
-  comment ("milestone 4").
+- **Gang scheduling — done (scoped).** `gang_enabled` / `gang_size_nodes`
+  are parsed from Forge annotations. `ResourceManager` requires gang jobs
+  to spread `gpu_count / gang_size_nodes` GPUs across each of
+  `gang_size_nodes` distinct nodes (all-or-nothing). This matches a
+  buildable subset of Forge gang semantics without the full ForgeGang plugin
+  spec. `ForgeScheduler` remains a stub — use `priority` or `preemptive`
+  schedulers; gang behavior is resource-layer, not scheduler-layer.
 - **Preemption — done.** `PreemptivePriorityScheduler`
   (`crates/forgesim-scheduler/src/preemptive.rs`) extends priority ordering:
   a waiting job that can't currently fit may evict lower-priority running
@@ -114,22 +112,16 @@ together — recommend separate PRs in the order below.
 
 ## Open questions
 
-1. **What does "ForgeGang plugin parity" actually require?** The milestone
-   name implies matching a specific Forge scheduler plugin's behavior, but
-   nothing in this repo documents that plugin's placement policy (scoring,
-   node grouping, min-available thresholds). Needs either a spec from the
-   Forge side or a decision to scope this down to "atomic multi-node gang
-   placement with node-count-aware bin packing," which is buildable without
-   external input. This is the only remaining open question — still
-   blocking `ForgeScheduler` (currently an empty stub).
+1. ~~**What does "ForgeGang plugin parity" actually require?**~~ Scoped down
+   to node-aware all-or-nothing gang placement (implemented). Full ForgeGang
+   plugin scoring/policy can be added later if a spec becomes available.
 
 ## Suggested order
 
 1. ~~**Quotas**~~ — done, see above.
 2. ~~**Priority scheduler**~~ — done, see above.
 3. ~~**Preemption**~~ — done, see above.
-4. **Gang plugin parity** — blocked on open question 1. Until that's
-   answered, no code to write here beyond what M2 already did.
+4. ~~**Gang plugin parity**~~ — scoped and implemented as node-aware gang.
 
 ## Non-goals for M6
 

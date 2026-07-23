@@ -6,10 +6,10 @@
 | **M2 — Forge Compatibility** | Done | Multi-CRD ingest, corrected mappings, profiles, `--forge-bundle` CLI |
 | **M3 — Trace replay** | Done | Scheduler event JSONL replay + oracle vs FIFO diff report |
 | **M4 — MIG simulation** | Done | MIG slice partition/reconfig with simulated delay |
-| **M5 — Topology** | [Scoped](design/m5_topology.md) | NVLink/PCIe graph from FabricGpuNode topology |
-| **M6 — Forge scheduler features** | In progress ([scope](design/m6_scheduler_features.md)) | Quotas (done), priority (done), preemption (done), gang plugin parity (blocked) |
-| **M7 — RL** | Planned | Gymnasium wrapper, PPO baselines |
-| **M8 — Visualization** | Planned | Gantt, heatmaps, notebooks |
+| **M5 — Topology** | Done | NVLink-domain-aware placement + `topology_penalties` metric |
+| **M6 — Forge scheduler features** | Done | Quotas, priority, preemption, node-aware gang placement |
+| **M7 — RL** | Done | Gymnasium wrapper, PPO baseline, stepped `RlSession` |
+| **M8 — Visualization** | Done | Gantt, heatmaps, `--jobs-output` timeline JSON |
 
 ## M2 success criteria
 
@@ -42,6 +42,18 @@ cargo run -p forgesim-cli -- run --forge-bundle tests/fixtures/forge --profiles-
 cargo run -p forgesim-cli -- replay \
   --trace tests/fixtures/traces/fifo_match.jsonl \
   --config configs/clusters/single_gpu.yaml
+
+# Priority / preemption (M6)
+cargo run -p forgesim-cli -- run --config configs/clusters/preemption_preemptive.yaml
+
+# Topology + gang (M5 / M6)
+cargo run -p forgesim-cli -- run --config configs/clusters/topology_h100.yaml
+cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
+
+# Timeline export + viz (M8)
+cargo run -p forgesim-cli -- run \
+  --config configs/clusters/small_h100.yaml \
+  --jobs-output outputs/jobs.json
 ```
 
 ## Running tests
@@ -72,20 +84,52 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 - [x] `mig_reconfigs` tracked in metrics output
 - [x] Forge `spec.mig.profile/count` mapped at ingest (M2) and simulated (M4)
 
-## M6 progress
+## M5 success criteria
 
-- [x] Quotas: `FabricQuota.spec.gpuQuota.maxGPUs` enforced per tenant at
-      placement time (see `docs/forge_input.md` "Tenant GPU quotas")
-- [x] Priority scheduler: `scheduler.type: priority` (internal YAML) /
-      `--scheduler priority` (`forge-sim run --forge-bundle`, `forge-sim
-      replay`) — highest `priority` first, ties broken by earliest
-      arrival. Does not preempt already-running jobs.
+- [x] Jobs with `network_bw_gbps` or `gang_enabled` prefer same `nvlink_group`
+- [x] Fallback scatter placement increments `topology_penalties` in metrics
+- [x] Integration test `integration_topology_workload_completes`
+- [x] Example config `configs/clusters/topology_h100.yaml`
+
+## M6 success criteria
+
+- [x] Quotas: `FabricQuota.spec.gpuQuota.maxGPUs` enforced per tenant at placement time
+- [x] Priority scheduler: `scheduler.type: priority` / `--scheduler priority`
 - [x] Preemption: `scheduler.type: preemptive` / `--scheduler preemptive`
-      — a waiting job may evict lower-priority running jobs to fit;
-      evicted jobs resume later with their remaining runtime (no restart
-      penalty), up to 3 preemptions each before becoming exempt.
-      `preemptions` tracked in metrics output. See
-      `design/m6_scheduler_features.md` for the design (including a real
-      stale-event correctness bug found and fixed along the way).
-- [ ] Gang plugin parity (blocked on a spec for Forge's `ForgeGang` plugin
-      behavior — see `design/m6_scheduler_features.md`)
+- [x] Gang: `gang_enabled` + `gang_size_nodes` require GPUs across N distinct nodes (all-or-nothing)
+- [x] Integration tests for priority, preemption, gang
+
+## M7 success criteria
+
+- [x] `RlSession` stepped DES interface in Rust
+- [x] `SimSession` PyO3 bindings (`reset`, `observe`, `step`, `metrics`)
+- [x] `ForgeSimEnv` Gymnasium wrapper
+- [x] PPO baseline in `python/baselines/ppo_cleanrl.py`
+- [x] Integration test `integration_rl_session_fifo_completes`
+
+### RL (M7)
+
+```bash
+maturin develop
+pip install -e '.[rl]'
+python python/examples/run_rl_env.py
+python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
+PYTHONPATH=python python3 -m unittest python.tests.test_rl_env -v
+```
+
+## M8 success criteria
+
+- [x] `JobsTimeline` JSON export via `--jobs-output`
+- [x] Python `forgesim.viz` module (Gantt + GPU heatmap)
+- [x] Example script `python/examples/plot_run.py`
+- [x] Integration test `integration_simulation_writes_jobs_timeline`
+
+### Visualization (M8)
+
+```bash
+cargo run -p forgesim-cli -- run \
+  --config configs/clusters/small_h100.yaml \
+  --jobs-output outputs/jobs.json
+pip install -e '.[viz]'
+python python/examples/plot_run.py outputs/jobs.json
+```

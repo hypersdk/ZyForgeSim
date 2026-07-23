@@ -2,6 +2,81 @@ use forgesim_core::cluster::Cluster;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobTimelineRecord {
+    pub job_id: String,
+    pub name: String,
+    pub arrival_time: f64,
+    pub start_time: Option<f64>,
+    pub finish_time: Option<f64>,
+    pub runtime: f64,
+    pub gpu_count: u32,
+    pub assigned_gpus: Vec<String>,
+    pub priority: u32,
+    pub tenant: Option<String>,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobsTimeline {
+    pub makespan: f64,
+    pub gpu_count: usize,
+    pub jobs: Vec<JobTimelineRecord>,
+}
+
+impl JobsTimeline {
+    pub fn from_cluster(cluster: &Cluster) -> Self {
+        let mut jobs: Vec<JobTimelineRecord> = cluster
+            .finished_jobs
+            .iter()
+            .map(job_to_timeline_record)
+            .collect();
+        for job in cluster.running_jobs.values() {
+            jobs.push(job_to_timeline_record(job));
+        }
+        for job in &cluster.waiting_queue {
+            jobs.push(job_to_timeline_record(job));
+        }
+        jobs.sort_by(|a, b| {
+            a.arrival_time
+                .partial_cmp(&b.arrival_time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.job_id.cmp(&b.job_id))
+        });
+
+        let makespan = jobs
+            .iter()
+            .filter_map(|j| j.finish_time)
+            .fold(0.0_f64, f64::max);
+
+        Self {
+            makespan,
+            gpu_count: cluster.gpu_count(),
+            jobs,
+        }
+    }
+
+    pub fn to_json_pretty(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into())
+    }
+}
+
+fn job_to_timeline_record(job: &forgesim_core::models::Job) -> JobTimelineRecord {
+    JobTimelineRecord {
+        job_id: job.id.clone(),
+        name: job.name.clone(),
+        arrival_time: job.arrival_time,
+        start_time: job.start_time,
+        finish_time: job.finish_time,
+        runtime: job.runtime,
+        gpu_count: job.gpu_count,
+        assigned_gpus: job.assigned_gpus.clone(),
+        priority: job.priority,
+        tenant: job.tenant.clone(),
+        state: format!("{:?}", job.state).to_lowercase(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationMetrics {
     pub makespan: f64,
     pub mean_wait_time: f64,
@@ -13,6 +88,8 @@ pub struct SimulationMetrics {
     pub mig_reconfigs: u32,
     #[serde(default)]
     pub preemptions: u32,
+    #[serde(default)]
+    pub topology_penalties: u32,
 }
 
 impl SimulationMetrics {
@@ -49,6 +126,7 @@ impl SimulationMetrics {
             queue_max_length: 0,
             mig_reconfigs: cluster.mig_reconfigs,
             preemptions: cluster.total_preemptions,
+            topology_penalties: cluster.topology_penalties,
         }
     }
 
