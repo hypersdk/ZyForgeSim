@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::models::{Gpu, Job, JobState, MigSlice, Node};
+use crate::topology::TopologyGraph;
 
 #[derive(Debug, Clone)]
 pub struct Cluster {
@@ -14,6 +15,9 @@ pub struct Cluster {
     pub total_preemptions: u32,
     /// Jobs placed without preferred NVLink locality (M5 fallback).
     pub topology_penalties: u32,
+    /// Extra simulated runtime seconds from cross-domain placement (M5 phase 2).
+    pub topology_runtime_inflation: f64,
+    pub topology: TopologyGraph,
     /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
     /// Tenants with no entry are unrestricted.
     pub tenant_quotas: HashMap<String, u32>,
@@ -30,6 +34,8 @@ impl Cluster {
             mig_reconfigs: 0,
             total_preemptions: 0,
             topology_penalties: 0,
+            topology_runtime_inflation: 0.0,
+            topology: TopologyGraph::default(),
             tenant_quotas: HashMap::new(),
         }
     }
@@ -82,6 +88,19 @@ impl Cluster {
         }
         job.state = JobState::Finished;
         job.finish_time = Some(finish_time);
+        self.finished_jobs.push(job.clone());
+        Some(job)
+    }
+
+    /// Remove a waiting gang job that exceeded its scheduling timeout.
+    pub fn fail_waiting_job(&mut self, job_id: &str, at_time: f64) -> Option<Job> {
+        let idx = self
+            .waiting_queue
+            .iter()
+            .position(|j| j.id == job_id)?;
+        let mut job = self.waiting_queue.remove(idx);
+        job.state = JobState::Failed;
+        job.finish_time = Some(at_time);
         self.finished_jobs.push(job.clone());
         Some(job)
     }

@@ -27,8 +27,11 @@ Rust workspace
    preemptive scheduler may also evict lower-priority running jobs back
    into the waiting queue to make room
 3. `ResourceManager` enforces tenant quotas, gang node spread, and NVLink-domain
-   locality (with scatter fallback tracked as `topology_penalties`)
-4. `JobComplete` events free resources and trigger re-scheduling — each
+   locality (with scatter fallback tracked as `topology_penalties`). Cross-domain
+   placement inflates job runtime via `TopologyGraph` (`topology_runtime_inflation`).
+4. Gang jobs with `gang_timeout_secs` schedule a `GangTimeout` event; jobs still
+   waiting when it fires move to `JobState::Failed` (`jobs_failed` metric).
+5. `JobComplete` events free resources and trigger re-scheduling — each
    carries the `Job::run_generation` it completes, so a stale event from a
    run that was preempted before finishing is ignored rather than
    corrupting the job's later, actual completion
@@ -63,7 +66,7 @@ utilization heatmaps.
 | M2 | Forge CRD bundle ingest |
 | M3 | Scheduler trace replay + diff |
 | M4 | MIG slice partition/reconfig delay |
-| M5 | NVLink-domain-aware placement + `topology_penalties` |
-| M6 | Quotas, priority, preemption, node-aware gang placement |
+| M5 | NVLink-domain placement, `topology_penalties`, runtime inflation |
+| M6 | Quotas, priority, preemption, gang spread + timeout, `ForgeScheduler`, `BestFitScheduler` |
 | M7 | Stepped RL session + Gymnasium env + PPO baseline |
 | M8 | Jobs timeline export + Gantt/heatmap viz |

@@ -90,6 +90,7 @@ spec:
 | `spec.mig.profile/count` | `mig_profile`, `mig_count` (simulated M4) |
 | `metadata.annotations[forge.ai/gang-schedule]` | `gang_enabled` |
 | `metadata.annotations[forge.ai/gang-size]` | `gang_size_nodes` |
+| `metadata.annotations[forge.ai/gang-timeout]` | `gang_timeout_secs` (e.g. `"10m"` → 600) |
 | `FabricQuota.spec.team` + job namespace | `tenant` |
 | Calibrated profile `(model, gpuType)` | `runtime`, `gpu_memory_gb` |
 
@@ -131,6 +132,21 @@ still eventually finishes rather than being evicted forever. Only
 whole-GPU jobs trigger eviction; a MIG job that doesn't fit is left
 waiting. `SimulationMetrics.preemptions` counts how many evictions
 happened (`forge-sim run` prints a `preemptions:` line when nonzero).
+
+## Gang scheduling (M6)
+
+Gang jobs (`forge.ai/gang-schedule: "true"`, `forge.ai/gang-size: N`) require
+`gpu_count / N` GPUs on each of `N` distinct nodes before starting
+(all-or-nothing). If the gang cannot be placed within
+`forge.ai/gang-timeout` (e.g. `"10m"`, `"600s"`), the job fails with
+`JobState::Failed` and appears in `SimulationMetrics.jobs_failed`.
+
+Internal YAML workloads set the same fields via `gang_enabled`,
+`gang_size_nodes`, and `gang_timeout_secs`:
+
+```bash
+cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
+```
 
 ## Calibrated profiles
 
