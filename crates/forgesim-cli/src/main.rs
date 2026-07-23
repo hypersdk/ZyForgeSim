@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use forgesim_config::{
-    load_cluster_from_config, load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file,
-    trace_diff_to_json,
+    load_cluster_from_config, load_forge_bundle, run_forge_bundle_report, run_simulation_report,
+    run_trace_file, trace_diff_to_json, SimulationReport,
 };
 
 #[derive(Parser)]
@@ -42,6 +42,9 @@ enum Commands {
         /// Write metrics JSON to this path
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Write jobs timeline JSON for visualization (M8)
+        #[arg(long)]
+        jobs_output: Option<PathBuf>,
     },
     /// Replay a scheduler event trace and compare against a simulated policy
     Replay {
@@ -91,6 +94,10 @@ fn print_metrics(metrics: forgesim_metrics::SimulationMetrics, output: Option<Pa
         println!("  preemptions:       {}", metrics.preemptions);
     }
 
+    if metrics.topology_penalties > 0 {
+        println!("  topology penalties: {}", metrics.topology_penalties);
+    }
+
     let json = metrics.to_json_pretty();
     let out = output.unwrap_or_else(|| PathBuf::from("outputs/metrics.json"));
     if let Some(parent) = out.parent() {
@@ -101,6 +108,22 @@ fn print_metrics(metrics: forgesim_metrics::SimulationMetrics, output: Option<Pa
         std::process::exit(1);
     });
     println!("  metrics written:   {}", out.display());
+}
+
+fn print_report(report: SimulationReport, output: Option<PathBuf>, jobs_output: Option<PathBuf>) {
+    print_metrics(report.metrics, output);
+
+    if let Some(jobs_out) = jobs_output {
+        let json = report.timeline.to_json_pretty();
+        if let Some(parent) = jobs_out.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&jobs_out, &json).unwrap_or_else(|e| {
+            eprintln!("failed to write jobs timeline: {e}");
+            std::process::exit(1);
+        });
+        println!("  timeline written:  {}", jobs_out.display());
+    }
 }
 
 fn print_trace_report(report: forgesim_config::TraceDiffReport, output: Option<PathBuf>) {
@@ -154,9 +177,10 @@ fn main() {
             mig_profiles_dir,
             scheduler,
             output,
+            jobs_output,
         } => {
-            let metrics = if let Some(bundle) = forge_bundle {
-                run_forge_bundle(
+            let report = if let Some(bundle) = forge_bundle {
+                run_forge_bundle_report(
                     &bundle,
                     &profiles_dir,
                     &gpu_type_registry,
@@ -165,7 +189,7 @@ fn main() {
                     &scheduler,
                 )
             } else if let Some(config) = config {
-                run_simulation(&config)
+                run_simulation_report(&config)
             } else {
                 eprintln!("error: provide --config or --forge-bundle");
                 std::process::exit(1);
@@ -175,7 +199,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            print_metrics(metrics, output);
+            print_report(report, output, jobs_output);
         }
         Commands::Replay {
             trace,

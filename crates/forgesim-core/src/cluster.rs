@@ -12,6 +12,8 @@ pub struct Cluster {
     pub clock: f64,
     pub mig_reconfigs: u32,
     pub total_preemptions: u32,
+    /// Jobs placed without preferred NVLink locality (M5 fallback).
+    pub topology_penalties: u32,
     /// Max GPUs a tenant may hold across running jobs, keyed by tenant name.
     /// Tenants with no entry are unrestricted.
     pub tenant_quotas: HashMap<String, u32>,
@@ -27,6 +29,7 @@ impl Cluster {
             clock: 0.0,
             mig_reconfigs: 0,
             total_preemptions: 0,
+            topology_penalties: 0,
             tenant_quotas: HashMap::new(),
         }
     }

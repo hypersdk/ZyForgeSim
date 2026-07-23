@@ -57,28 +57,16 @@ impl ResourceManager {
         if job.gpu_count == 0 {
             return false;
         }
-        let free: Vec<_> = cluster
-            .all_gpus()
-            .filter(|g| g.is_whole_gpu_free())
-            .collect();
-        if free.len() < job.gpu_count as usize {
-            return false;
+        if let Some(nodes) = gang_nodes_needed(job) {
+            return select_gang_gpus(cluster, job, nodes).is_some();
         }
-        if job.gpu_memory_gb > 0.0 {
-            let eligible = free
-                .iter()
-                .filter(|g| g.memory_gb >= job.gpu_memory_gb)
-                .count();
-            if eligible < job.gpu_count as usize {
-                return false;
-            }
-        }
-        true
+        let free = eligible_free_gpus(cluster, job);
+        free.len() >= job.gpu_count as usize
     }
 
     fn allocate_whole_gpu(
         &self,
-        cluster: &Cluster,
+        cluster: &mut Cluster,
         job: &Job,
         start_time: f64,
     ) -> SimResult<Placement> {
@@ -89,25 +77,18 @@ impl ResourceManager {
             });
         }
 
-        let mut selected = Vec::new();
-        for gpu in cluster.all_gpus() {
-            if !gpu.is_whole_gpu_free() {
-                continue;
-            }
-            if job.gpu_memory_gb > 0.0 && gpu.memory_gb < job.gpu_memory_gb {
-                continue;
-            }
-            selected.push(gpu.id.clone());
-            if selected.len() == job.gpu_count as usize {
-                break;
-            }
-        }
+        let (selected, used_penalty) = if let Some(nodes) = gang_nodes_needed(job) {
+            let ids = select_gang_gpus(cluster, job, nodes).expect("can_place implied selection");
+            (ids, false)
+        } else if wants_topology_aware(job) {
+            select_gpus_topology_aware(cluster, job).expect("can_place implied selection")
+        } else {
+            let ids = select_gpus_scatter(cluster, job).expect("can_place implied selection");
+            (ids, false)
+        };
 
-        if selected.len() != job.gpu_count as usize {
-            return Err(SimError::InsufficientGpus {
-                need: job.gpu_count,
-                available: cluster.free_gpu_count() as u32,
-            });
+        if used_penalty {
+            cluster.topology_penalties += 1;
         }
 
         Ok(Placement {
@@ -233,6 +214,130 @@ impl Default for ResourceManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn memory_eligible(gpu: &crate::models::Gpu, job: &Job) -> bool {
+    job.gpu_memory_gb <= 0.0 || gpu.memory_gb >= job.gpu_memory_gb
+}
+
+fn eligible_free_gpus<'a>(cluster: &'a Cluster, job: &Job) -> Vec<&'a crate::models::Gpu> {
+    cluster
+        .all_gpus()
+        .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job))
+        .collect()
+}
+
+fn gang_nodes_needed(job: &Job) -> Option<u32> {
+    if job.gang_enabled {
+        job.gang_size_nodes.filter(|&n| n > 0)
+    } else {
+        None
+    }
+}
+
+fn gpus_per_gang_node(job: &Job, nodes: u32) -> Option<u32> {
+    if nodes == 0 || job.gpu_count % nodes != 0 {
+        None
+    } else {
+        Some(job.gpu_count / nodes)
+    }
+}
+
+/// Gang jobs require `nodes` distinct nodes each with `gpu_count / nodes` free GPUs.
+fn select_gang_gpus(cluster: &Cluster, job: &Job, nodes: u32) -> Option<Vec<String>> {
+    let per_node = gpus_per_gang_node(job, nodes)?;
+
+    let mut node_candidates: Vec<(String, Vec<String>)> = cluster
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let ids: Vec<String> = node
+                .gpus
+                .iter()
+                .filter(|g| g.is_whole_gpu_free() && memory_eligible(g, job))
+                .map(|g| g.id.clone())
+                .collect();
+            if ids.len() >= per_node as usize {
+                Some((node.id.clone(), ids))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if node_candidates.len() < nodes as usize {
+        return None;
+    }
+
+    // Prefer nodes with fewer spare GPUs (tighter packing), then stable id order.
+    node_candidates.sort_by(|a, b| {
+        a.1.len()
+            .cmp(&b.1.len())
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let mut selected = Vec::with_capacity(job.gpu_count as usize);
+    for (_, mut gpu_ids) in node_candidates.into_iter().take(nodes as usize) {
+        gpu_ids.truncate(per_node as usize);
+        selected.extend(gpu_ids);
+    }
+    Some(selected)
+}
+
+fn wants_topology_aware(job: &Job) -> bool {
+    job.gang_enabled || job.network_bw_gbps.is_some()
+}
+
+fn select_gpus_scatter(cluster: &Cluster, job: &Job) -> Option<Vec<String>> {
+    let mut selected = Vec::new();
+    for gpu in cluster.all_gpus() {
+        if !gpu.is_whole_gpu_free() || !memory_eligible(gpu, job) {
+            continue;
+        }
+        selected.push(gpu.id.clone());
+        if selected.len() == job.gpu_count as usize {
+            return Some(selected);
+        }
+    }
+    None
+}
+
+/// Prefer placing all GPUs within one NVLink domain; fall back to scatter.
+fn select_gpus_topology_aware(cluster: &Cluster, job: &Job) -> Option<(Vec<String>, bool)> {
+    let free = eligible_free_gpus(cluster, job);
+    if free.len() < job.gpu_count as usize {
+        return None;
+    }
+
+    use std::collections::HashMap;
+    let mut by_group: HashMap<Option<u32>, Vec<&crate::models::Gpu>> = HashMap::new();
+    for gpu in free {
+        by_group.entry(gpu.nvlink_group).or_default().push(gpu);
+    }
+
+    let mut best_group: Option<Option<u32>> = None;
+    let mut best_len = 0usize;
+    for (group, gpus) in &by_group {
+        if gpus.len() >= job.gpu_count as usize && gpus.len() > best_len {
+            best_len = gpus.len();
+            best_group = Some(*group);
+        }
+    }
+
+    if let Some(group) = best_group {
+        let ids: Vec<String> = by_group
+            .get(&group)
+            .expect("group exists")
+            .iter()
+            .take(job.gpu_count as usize)
+            .map(|g| g.id.clone())
+            .collect();
+        if ids.len() == job.gpu_count as usize {
+            return Some((ids, false));
+        }
+    }
+
+    select_gpus_scatter(cluster, job).map(|ids| (ids, true))
 }
 
 #[cfg(test)]
@@ -423,5 +528,124 @@ mod tests {
         assert_eq!(p2.gpu_ids.len(), 1);
         assert_eq!(p2.start_time, 40.0);
         assert_eq!(cluster.mig_reconfigs, 1);
+    }
+
+    fn two_node_cluster() -> Cluster {
+        Cluster::new(vec![
+            Node {
+                id: "node-a".into(),
+                gpus: (0..4)
+                    .map(|i| Gpu {
+                        id: format!("a-g{i}"),
+                        node_id: "node-a".into(),
+                        profile: "H100".into(),
+                        memory_gb: 80.0,
+                        nvlink_group: Some(i / 2),
+                        running_job_id: None,
+                        mig_capable: false,
+                        active_mig_profile: None,
+                        slices: Vec::new(),
+                    })
+                    .collect(),
+            },
+            Node {
+                id: "node-b".into(),
+                gpus: (0..4)
+                    .map(|i| Gpu {
+                        id: format!("b-g{i}"),
+                        node_id: "node-b".into(),
+                        profile: "H100".into(),
+                        memory_gb: 80.0,
+                        nvlink_group: Some(i / 2),
+                        running_job_id: None,
+                        mig_capable: false,
+                        active_mig_profile: None,
+                        slices: Vec::new(),
+                    })
+                    .collect(),
+            },
+        ])
+    }
+
+    #[test]
+    fn gang_job_requires_spread_across_nodes() {
+        let cluster = two_node_cluster();
+        let rm = ResourceManager::new();
+        let mut job = Job::new("g1", "gang", 0.0, 10.0, 4);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(2);
+        assert!(rm.can_place(&cluster, &job));
+        let placement = rm.allocate(&mut cluster.clone(), &job, 0.0).unwrap();
+        let nodes: std::collections::HashSet<_> = placement
+            .gpu_ids
+            .iter()
+            .map(|id| cluster.gpu(id).unwrap().node_id.clone())
+            .collect();
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn gang_job_rejects_when_not_enough_nodes() {
+        let mut cluster = two_node_cluster();
+        cluster.nodes.pop(); // single node only
+        let rm = ResourceManager::new();
+        let mut job = Job::new("g1", "gang", 0.0, 10.0, 8);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(2);
+        assert!(!rm.can_place(&cluster, &job));
+    }
+
+    #[test]
+    fn topology_aware_prefers_single_nvlink_group() {
+        let cluster = two_node_cluster();
+        let rm = ResourceManager::new();
+        let mut job = Job::new("j1", "net", 0.0, 10.0, 2);
+        job.network_bw_gbps = Some(100.0);
+        let mut c = cluster.clone();
+        let placement = rm.allocate(&mut c, &job, 0.0).unwrap();
+        let groups: std::collections::HashSet<_> = placement
+            .gpu_ids
+            .iter()
+            .map(|id| cluster.gpu(id).unwrap().nvlink_group)
+            .collect();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(c.topology_penalties, 0);
+    }
+
+    #[test]
+    fn topology_fallback_increments_penalty() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![
+                Gpu {
+                    id: "g0".into(),
+                    node_id: "n0".into(),
+                    profile: "H100".into(),
+                    memory_gb: 80.0,
+                    nvlink_group: Some(0),
+                    running_job_id: None,
+                    mig_capable: false,
+                    active_mig_profile: None,
+                    slices: Vec::new(),
+                },
+                Gpu {
+                    id: "g1".into(),
+                    node_id: "n0".into(),
+                    profile: "H100".into(),
+                    memory_gb: 80.0,
+                    nvlink_group: Some(1),
+                    running_job_id: None,
+                    mig_capable: false,
+                    active_mig_profile: None,
+                    slices: Vec::new(),
+                },
+            ],
+        }]);
+        let rm = ResourceManager::new();
+        let mut job = Job::new("j1", "net", 0.0, 10.0, 2);
+        job.network_bw_gbps = Some(100.0);
+        let placement = rm.allocate(&mut cluster, &job, 0.0).unwrap();
+        assert_eq!(placement.gpu_ids.len(), 2);
+        assert_eq!(cluster.topology_penalties, 1);
     }
 }

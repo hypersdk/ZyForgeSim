@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 use forgesim_core::cluster::Cluster;
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
-use forgesim_metrics::SimulationMetrics;
+use forgesim_metrics::{JobsTimeline, SimulationMetrics};
 use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
 use serde::Deserialize;
 use serde_yaml::Value;
 
 use crate::{
     load_hardware_profiles, resolve_mig_registry_for_cluster, ConfigError, ConfigResult,
-    HardwareProfile,
+    HardwareProfile, SimulationReport,
 };
 
 const FORGE_API_GROUP: &str = "forge.ai/v1";
@@ -440,14 +440,14 @@ pub fn load_forge_bundle(
     Ok(ForgeBundle { jobs, cluster })
 }
 
-pub fn run_forge_bundle(
+pub fn run_forge_bundle_report(
     bundle_dir: &Path,
     profiles_dir: &Path,
     gpu_registry_path: &Path,
     hardware_profiles_dir: &Path,
     mig_profiles_dir: &Path,
     scheduler: &str,
-) -> ConfigResult<SimulationMetrics> {
+) -> ConfigResult<SimulationReport> {
     let bundle = load_forge_bundle(
         bundle_dir,
         profiles_dir,
@@ -476,7 +476,7 @@ pub fn run_forge_bundle(
         Some(registry) => ResourceManager::with_mig(registry),
         None => ResourceManager::new(),
     };
-    let metrics = match scheduler {
+    let (cluster, metrics) = match scheduler {
         "fifo" => crate::run_to_completion(
             bundle.cluster,
             FifoScheduler,
@@ -504,7 +504,29 @@ pub fn run_forge_bundle(
             )));
         }
     };
-    Ok(metrics)
+    Ok(SimulationReport {
+        metrics,
+        timeline: JobsTimeline::from_cluster(&cluster),
+    })
+}
+
+pub fn run_forge_bundle(
+    bundle_dir: &Path,
+    profiles_dir: &Path,
+    gpu_registry_path: &Path,
+    hardware_profiles_dir: &Path,
+    mig_profiles_dir: &Path,
+    scheduler: &str,
+) -> ConfigResult<SimulationMetrics> {
+    Ok(run_forge_bundle_report(
+        bundle_dir,
+        profiles_dir,
+        gpu_registry_path,
+        hardware_profiles_dir,
+        mig_profiles_dir,
+        scheduler,
+    )?
+    .metrics)
 }
 
 #[cfg(test)]

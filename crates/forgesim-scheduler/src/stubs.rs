@@ -24,5 +24,5 @@ macro_rules! stub_scheduler {
 stub_scheduler!(BestFitScheduler, "not implemented — milestone 2");
 stub_scheduler!(
     ForgeScheduler,
-    "not implemented — milestone 6, blocked on Forge gang plugin spec"
+    "not implemented — use priority/preemptive; gang placement is in ResourceManager"
 );

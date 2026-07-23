@@ -1,6 +1,8 @@
 # M5 — Topology (scoping)
 
-Status: planned, not started. This is a design scope, not an implementation plan — flags open questions to resolve before writing code.
+Status: **done** (first slice). Domain-level NVLink grouping with scatter
+fallback and `topology_penalties` metric. See
+[`resource.rs`](../../crates/forgesim-core/src/resource.rs).
 
 ## What exists today
 

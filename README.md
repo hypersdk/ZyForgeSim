@@ -5,7 +5,7 @@ ForgeSim is a discrete-event simulator for Kubernetes-native GPU scheduling insp
 ## Architecture
 
 - **Rust core** — event engine, cluster model, schedulers, metrics, Forge bundle loader
-- **Python API** — thin PyO3 bindings + Forge CRD adapters
+- **Python API** — thin PyO3 bindings + Forge CRD adapters, Gymnasium env, visualization
 
 ## Quick start
 
@@ -44,6 +44,21 @@ cargo run -p forgesim-cli -- run \
   --profiles-dir configs/profiles
 ```
 
+### Scheduler policies (M6)
+
+```bash
+# Priority: highest priority first, no preemption
+cargo run -p forgesim-cli -- run --config configs/clusters/priority_scheduler.yaml
+
+# Preemptive: evict lower-priority running jobs for higher-priority arrivals
+cargo run -p forgesim-cli -- run --config configs/clusters/preemption_preemptive.yaml
+
+# Forge bundle with scheduler flag
+cargo run -p forgesim-cli -- run \
+  --forge-bundle tests/fixtures/forge \
+  --scheduler preemptive
+```
+
 ### Scheduler trace replay (M3 — compare vs production Forge)
 
 ```bash
@@ -62,13 +77,38 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 
 MIG jobs use `mig_profile` and `mig_count` (Forge `spec.mig`) to allocate fractional GPU slices with a simulated reconfiguration delay.
 
-### Python
+### Topology + gang placement (M5 / M6)
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-maturin build --release
-pip install target/wheels/forgesim-*.whl pyyaml
-python3 -m unittest discover -s python/tests -v
+# NVLink-domain-aware placement with topology_penalties metric
+cargo run -p forgesim-cli -- run --config configs/clusters/topology_h100.yaml
+
+# Gang jobs require GPUs spread across gang_size_nodes distinct nodes
+cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
+```
+
+### Visualization (M8)
+
+```bash
+cargo run -p forgesim-cli -- run \
+  --config configs/clusters/small_h100.yaml \
+  --jobs-output outputs/jobs.json
+
+pip install -e '.[viz]'
+python python/examples/plot_run.py outputs/jobs.json
+```
+
+### Python + RL (M7)
+
+On macOS Homebrew Python, use the setup script if `venv` fails on `pyexpat`:
+
+```bash
+./scripts/setup_venv.sh
+source .venv/bin/activate
+maturin develop
+pip install -e '.[rl]'
+python python/examples/run_rl_env.py
+python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
 ```
 
 ### Test layout
@@ -76,7 +116,7 @@ python3 -m unittest discover -s python/tests -v
 | Layer | Location | What it covers |
 |-------|----------|----------------|
 | Rust unit | `crates/*/src/` (`#[test]` modules) | Models, MIG, resource manager, FIFO, trace parsing |
-| Rust integration | `crates/forgesim-config/tests/integration.rs` | Full sim pipelines (YAML, Forge bundle, trace, MIG) |
+| Rust integration | `crates/forgesim-config/tests/integration.rs` | Full sim pipelines (YAML, Forge bundle, trace, MIG, RL, topology) |
 | CLI integration | `crates/forgesim-cli/tests/cli_integration.rs` | `forge-sim run` / `replay` binary |
 | Python unit | `python/tests/test_unit_adapters.py` | CRD mapping, profiles, bundle, trace adapters |
 | Python integration | `python/tests/test_integration_cli.py` | CLI via `cargo run -p forgesim-cli` |
@@ -92,7 +132,7 @@ PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 
 ```
 crates/              Rust workspace (core, scheduler, config, metrics, cli, py)
-python/forgesim/     Python package + adapters
+python/forgesim/     Python package + adapters, envs, viz
 configs/
   profiles/          Calibrated model runtimes (model + gpuType)
   hardware/          GPU capability profiles
@@ -102,7 +142,7 @@ docs/                Architecture, milestones, Forge input mapping
 
 ## Milestones
 
-See [docs/milestones.md](docs/milestones.md). M1–M4 are complete (simulation core, Forge compatibility, trace replay, MIG simulation).
+See [docs/milestones.md](docs/milestones.md). M1–M8 are complete.
 
 ## Forge input
 

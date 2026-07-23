@@ -4,7 +4,7 @@ mod trace;
 
 pub use forge_bundle::{
     load_forge_bundle, load_gpu_type_registry, load_model_profiles, parse_fabric_ai_job,
-    run_forge_bundle, ForgeBundle, GpuTypeRegistry, ModelProfile,
+    run_forge_bundle, run_forge_bundle_report, ForgeBundle, GpuTypeRegistry, ModelProfile,
 };
 pub use mig::{
     load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster,
@@ -23,10 +23,17 @@ use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::{Scheduler, SimulationEngine};
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::ResourceManager;
-use forgesim_metrics::SimulationMetrics;
+use forgesim_core::rl::RlSession;
+use forgesim_metrics::{JobsTimeline, SimulationMetrics};
 use forgesim_scheduler::{FifoScheduler, PreemptivePriorityScheduler, PriorityScheduler};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulationReport {
+    pub metrics: SimulationMetrics,
+    pub timeline: JobsTimeline,
+}
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -131,6 +138,10 @@ pub struct WorkloadJobSpec {
     pub mig_profile: Option<String>,
     #[serde(default)]
     pub mig_count: Option<u32>,
+    #[serde(default)]
+    pub gang_enabled: bool,
+    #[serde(default)]
+    pub gang_size_nodes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,6 +190,8 @@ pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
             network_bw_gbps: j.network_bw_gbps,
             mig_profile: j.mig_profile,
             mig_count: j.mig_count,
+            gang_enabled: j.gang_enabled,
+            gang_size_nodes: j.gang_size_nodes,
             ..Job::new("", "", 0.0, 0.0, 0)
         })
         .collect())
@@ -225,6 +238,10 @@ pub fn resolve_path(base: &Path, relative: &str) -> PathBuf {
 }
 
 pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
+    Ok(run_simulation_report(config_path)?.metrics)
+}
+
+pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationReport> {
     let config = load_simulation_config(config_path)?;
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
 
@@ -261,7 +278,7 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         None => ResourceManager::new(),
     };
 
-    let metrics = match config.scheduler.r#type.as_str() {
+    let (cluster, metrics) = match config.scheduler.r#type.as_str() {
         "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
         "priority" => run_to_completion(
             cluster,
@@ -284,7 +301,54 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
         }
     };
 
-    Ok(metrics)
+    Ok(SimulationReport {
+        metrics,
+        timeline: JobsTimeline::from_cluster(&cluster),
+    })
+}
+
+pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
+    let config = load_simulation_config(config_path)?;
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let hw_dir = resolve_path(base, &config.hardware_profiles_dir);
+    let profiles = load_hardware_profiles(&hw_dir)?;
+
+    let workload_path = resolve_path(base, &config.workload.path);
+    let jobs = load_workload(&workload_path)?;
+
+    let cluster = build_cluster(&config.cluster, &profiles)?;
+    let hardware_names: Vec<String> = config
+        .cluster
+        .nodes
+        .iter()
+        .flat_map(|n| n.gpus.iter().map(|g| g.profile.clone()))
+        .collect();
+    let any_mig_capable = cluster.all_gpus().any(|g| g.mig_capable);
+    let any_mig_job = jobs.iter().any(|j| j.is_mig_job());
+    let mig_dir = resolve_path(base, &config.mig_profiles_dir);
+    let mig_registry = if any_mig_job || any_mig_capable {
+        resolve_mig_registry_for_cluster(&mig_dir, &hardware_names, any_mig_capable)?
+    } else {
+        None
+    };
+    if any_mig_job && mig_registry.is_none() {
+        return Err(ConfigError::Invalid(
+            "workload contains MIG jobs but no MIG profile registry is configured".into(),
+        ));
+    }
+
+    let resource_manager = match mig_registry {
+        Some(registry) => ResourceManager::with_mig(registry),
+        None => ResourceManager::new(),
+    };
+
+    Ok(RlSession::new(
+        cluster,
+        resource_manager,
+        jobs,
+        forgesim_core::DEFAULT_OBS_TOP_K,
+    ))
 }
 
 fn run_to_completion<S: Scheduler>(
@@ -293,11 +357,14 @@ fn run_to_completion<S: Scheduler>(
     resource_manager: ResourceManager,
     jobs: Vec<Job>,
     jobs_total: usize,
-) -> SimulationMetrics {
+) -> (Cluster, SimulationMetrics) {
     let mut engine = SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager);
     engine.submit_jobs(jobs);
     engine.run();
-    SimulationMetrics::from_cluster(&engine.cluster, jobs_total)
+    (
+        engine.cluster.clone(),
+        SimulationMetrics::from_cluster(&engine.cluster, jobs_total),
+    )
 }
 
 #[cfg(test)]
