@@ -105,6 +105,25 @@ only serializes jobs *within* a tenant — it never blocks or reorders other
 tenants' jobs. Internal YAML configs can set the same limits directly via
 `cluster.tenant_quotas: { <tenant>: <maxGPUs> }`.
 
+**Known divergence from real Forge (as of this writing):** live-cluster
+testing found that Forge's actual quota enforcement is materially weaker
+than what ZyForgeSim simulates. `FabricQuota` is reconciled by a separate
+`quota-operator`, asynchronously (event-driven plus a 1-minute poll)
+against jobs that already exist — it is never consulted by the
+ai-operator's scheduler or an admission webhook before a job is placed.
+Even when it does detect a violation and marks a job `Rejected`, that
+phase isn't recognized by the ai-operator's own reconcile loop, and the
+phases that create the job's PVC/Service/StatefulSet are unconditional —
+not gated on quota status at all. In a same-namespace test (two jobs
+requesting 1 GPU each against a `maxGPUs: 1` quota), **both jobs reached
+`Running` simultaneously** on a real Forge deployment, while ZyForgeSim
+correctly serialized them (doubling the makespan, as designed). If
+you're using ZyForgeSim to predict what a live Forge cluster will
+actually do, don't assume quota caps hold — as of this writing, Forge
+will let a tenant exceed its quota if the raw GPU capacity is there. See
+`configs/profiles/quota-test-a.yaml`/`quota-test-b.yaml` for the test
+scenario's calibrated profiles.
+
 ## Priority scheduling (M6)
 
 `spec.priority` (0–100, mapped to `Job.priority`) can drive placement order
