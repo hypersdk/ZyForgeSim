@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from typing import Any
-
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -39,3 +37,15 @@ class ProfileRegistry:
                 f"no calibrated profile for model '{model}' gpuType '{gpu_type}'"
             )
         return float(entry["runtime_seconds"]), float(entry["gpu_memory_gb"])
+
+    def lookup_v2(self, model: str, gpu_type: str) -> tuple[float, float]:
+        """Return (prefill_ms_per_token, decode_tps)."""
+        profiles = self._profiles.get(model)
+        if not profiles:
+            raise ProfileLookupError(f"no profile for model '{model}'")
+        entry = profiles.get(gpu_type) or profiles.get(gpu_type.split("_")[0])
+        if not entry:
+            raise ProfileLookupError(f"no profile for model '{model}' gpu '{gpu_type}'")
+        prefill = float(entry.get("prefill_ms_per_token", 0.08))
+        decode = float(entry.get("decode_tps", 120.0))
+        return prefill, decode

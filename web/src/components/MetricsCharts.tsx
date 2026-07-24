@@ -1,4 +1,5 @@
 import type { SimulationMetrics } from "@/types/simulation";
+import { hasInferenceMetrics } from "@/types/simulation";
 import { chartColors } from "@/lib/theme";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, MetricTile } from "./ui";
@@ -12,6 +13,7 @@ export function MetricsDashboard({ metrics }: { metrics: SimulationMetrics | nul
 
   const meanWait = cumulativeWait(metrics);
   const unschedulable = metrics.jobs_unschedulable ?? 0;
+  const showInference = hasInferenceMetrics(metrics);
 
   const percentBars = [
     { name: "GPU util", value: metrics.gpu_utilization * 100 },
@@ -37,6 +39,15 @@ export function MetricsDashboard({ metrics }: { metrics: SimulationMetrics | nul
         <MetricTile label="Failed Jobs" value={String(metrics.jobs_failed)} />
         <MetricTile label="Queue Max" value={String(metrics.queue_max_length)} />
         <MetricTile label="Unschedulable" value={String(unschedulable)} />
+        {showInference ? (
+          <>
+            <MetricTile label="TTFT p50" value={`${(metrics.ttft_p50 ?? 0).toFixed(3)}s`} />
+            <MetricTile label="TTFT p99" value={`${(metrics.ttft_p99 ?? 0).toFixed(3)}s`} />
+            <MetricTile label="TPS mean" value={(metrics.tps_mean ?? 0).toFixed(1)} />
+            <MetricTile label="Goodput" value={`${((metrics.goodput ?? 0) * 100).toFixed(1)}%`} />
+            <MetricTile label="Queue delay p99" value={`${(metrics.queue_delay_p99 ?? 0).toFixed(3)}s`} />
+          </>
+        ) : null}
       </div>
       <Card title="Metrics Charts">
         <div className="grid gap-4 md:grid-cols-2">

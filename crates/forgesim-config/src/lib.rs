@@ -1,5 +1,6 @@
 mod forge_bundle;
 mod mig;
+mod serving_trace;
 mod trace;
 
 pub use forge_bundle::{
@@ -9,8 +10,14 @@ pub use forge_bundle::{
 pub use mig::{
     load_mig_registry, load_mig_registry_for_hardware, resolve_mig_registry_for_cluster,
 };
+pub use serving_trace::{
+    export_serving_trace_from_cluster, jobs_from_serving_trace, load_serving_trace,
+    validate_serving_trace, write_serving_trace_jsonl, ServingTraceFile, ServingTraceRecord,
+    SERVING_TRACE_VERSION,
+};
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 pub use trace::{
     compare_schedules, jobs_from_trace, load_cluster_from_config, load_trace,
@@ -21,11 +28,13 @@ pub use trace::{
 
 use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::{Scheduler, SimulationEngine};
+use forgesim_core::inference::{estimate_inference, InferenceProfile, InferenceRequest};
 use forgesim_core::models::{Gpu, Job, Node};
 use forgesim_core::resource::{GpuSelectionPolicy, ResourceManager};
 use forgesim_core::rl::RlSession;
+use forgesim_core::snapshot::ClusterSnapshot;
 use forgesim_core::topology::TopologyGraph;
-use forgesim_metrics::{JobsTimeline, SimulationMetrics};
+use forgesim_metrics::{CostModel, JobsTimeline, SchedulerBenchmarkReport, SimulationMetrics};
 use forgesim_scheduler::{
     BestFitScheduler, FifoScheduler, ForgeScheduler, PriorityScheduler,
 };
@@ -38,6 +47,14 @@ pub struct SimulationReport {
     pub timeline: JobsTimeline,
     #[serde(default)]
     pub decisions: Vec<forgesim_core::SchedulerDecision>,
+    #[serde(default)]
+    pub snapshots: Vec<forgesim_core::ClusterSnapshot>,
+    #[serde(default)]
+    pub scheduler: String,
+    #[serde(default)]
+    pub config_hash: String,
+    #[serde(default)]
+    pub benchmark: Option<SchedulerBenchmarkReport>,
 }
 
 #[derive(Debug, Error)]
@@ -46,6 +63,8 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("yaml error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("config error: {0}")]
     Invalid(String),
 }
@@ -120,6 +139,12 @@ pub struct SimulationConfig {
     pub hardware_profiles_dir: String,
     #[serde(default = "default_mig_profiles_dir")]
     pub mig_profiles_dir: String,
+    #[serde(default = "default_profiles_dir")]
+    pub profiles_dir: String,
+}
+
+fn default_profiles_dir() -> String {
+    "../profiles".into()
 }
 
 fn default_hardware_dir() -> String {
@@ -158,6 +183,18 @@ pub struct WorkloadJobSpec {
     pub gang_size_nodes: Option<u32>,
     #[serde(default)]
     pub gang_timeout_secs: Option<f64>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
+    #[serde(default)]
+    pub batch_size: Option<u32>,
+    #[serde(default)]
+    pub concurrency: Option<u32>,
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,13 +226,29 @@ pub fn load_simulation_config(path: &Path) -> ConfigResult<SimulationConfig> {
 }
 
 pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
+    load_workload_with_profiles(path, &HashMap::new(), &[])
+}
+
+pub fn load_workload_with_profiles(
+    path: &Path,
+    model_profiles: &HashMap<String, forge_bundle::ModelProfile>,
+    default_gpu_types: &[String],
+) -> ConfigResult<Vec<Job>> {
     let content = fs::read_to_string(path)?;
     let workload: WorkloadConfig = serde_yaml::from_str(&content)?;
+    let default_gpu = default_gpu_types.first().cloned().unwrap_or_else(|| "H100".into());
     let mut jobs = Vec::new();
     for j in workload.jobs {
+        if j.input_tokens == Some(0) && j.output_tokens == Some(0) {
+            return Err(ConfigError::Invalid(format!(
+                "job '{}': inference jobs need positive token counts",
+                j.id
+            )));
+        }
         let name = j.name.unwrap_or_else(|| "job".into());
-        let job = Job {
-            id: j.id.clone(),
+        let id = j.request_id.clone().unwrap_or_else(|| j.id.clone());
+        let mut job = Job {
+            id: id.clone(),
             name: name.clone(),
             arrival_time: j.arrival_time,
             runtime: j.runtime,
@@ -203,19 +256,86 @@ pub fn load_workload(path: &Path) -> ConfigResult<Vec<Job>> {
             gpu_memory_gb: j.gpu_memory_gb,
             priority: j.priority,
             tenant: j.tenant,
-            gpu_type: j.gpu_type,
+            gpu_type: j.gpu_type.clone(),
             network_bw_gbps: j.network_bw_gbps,
             mig_profile: j.mig_profile,
             mig_count: j.mig_count,
             gang_enabled: j.gang_enabled,
             gang_size_nodes: j.gang_size_nodes,
             gang_timeout_secs: j.gang_timeout_secs,
-            ..Job::new(j.id, name, j.arrival_time, j.runtime, j.gpu_count)
+            model_id: j.model_id.clone(),
+            input_tokens: j.input_tokens,
+            output_tokens: j.output_tokens,
+            batch_size: j.batch_size,
+            concurrency: j.concurrency,
+            ..Job::new(id, name, j.arrival_time, j.runtime, j.gpu_count)
         };
+        apply_inference_runtime(&mut job, model_profiles, &default_gpu)?;
         validate_job_gang_config(&job)?;
         jobs.push(job);
     }
     Ok(jobs)
+}
+
+fn apply_inference_runtime(
+    job: &mut Job,
+    model_profiles: &HashMap<String, forge_bundle::ModelProfile>,
+    default_gpu: &str,
+) -> ConfigResult<()> {
+    let Some(model_id) = job.model_id.clone() else {
+        return Ok(());
+    };
+    let Some(input_tokens) = job.input_tokens else {
+        return Ok(());
+    };
+    let Some(output_tokens) = job.output_tokens else {
+        return Ok(());
+    };
+    let gpu_type = job.gpu_type.clone().unwrap_or_else(|| default_gpu.to_string());
+    let profile = resolve_inference_profile(model_profiles, &model_id, &gpu_type)?;
+    let req = InferenceRequest {
+        input_tokens,
+        output_tokens,
+        batch_size: job.batch_size.unwrap_or(1),
+        concurrency: job.concurrency.unwrap_or(1),
+    };
+    let estimate = estimate_inference(&profile, req);
+    job.runtime = estimate.runtime_secs.max(0.001);
+    job.ttft_secs = Some(estimate.ttft_secs);
+    job.tps = Some(estimate.tps);
+    job.itl_secs = Some(estimate.itl_secs);
+    Ok(())
+}
+
+fn resolve_inference_profile(
+    model_profiles: &HashMap<String, forge_bundle::ModelProfile>,
+    model_id: &str,
+    gpu_type: &str,
+) -> ConfigResult<InferenceProfile> {
+    let profile = model_profiles.get(model_id).ok_or_else(|| {
+        ConfigError::Invalid(format!("unknown inference model profile '{model_id}'"))
+    })?;
+    let entry = profile
+        .profiles
+        .get(gpu_type)
+        .or_else(|| {
+            gpu_type
+                .split('_')
+                .next()
+                .and_then(|prefix| profile.profiles.get(prefix))
+        })
+        .ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "model '{model_id}' has no calibrated profile for gpu '{gpu_type}'"
+            ))
+        })?;
+    Ok(InferenceProfile {
+        model: model_id.to_string(),
+        gpu_type: gpu_type.to_string(),
+        prefill_ms_per_token: entry.prefill_ms_per_token(),
+        decode_tps: entry.decode_tps(),
+        max_batch: entry.max_batch(),
+    })
 }
 
 pub fn build_cluster(
@@ -296,15 +416,24 @@ pub fn run_simulation(config_path: &Path) -> ConfigResult<SimulationMetrics> {
 }
 
 pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationReport> {
-    let config = load_simulation_config(config_path)?;
+    run_simulation_report_with_scheduler(config_path, None)
+}
+
+pub fn run_simulation_report_with_scheduler(
+    config_path: &Path,
+    scheduler_override: Option<&str>,
+) -> ConfigResult<SimulationReport> {
+    let mut config = load_simulation_config(config_path)?;
+    if let Some(sched) = scheduler_override {
+        config.scheduler.r#type = sched.to_string();
+    }
+    let scheduler_name = config.scheduler.r#type.clone();
+    let config_hash = hash_config_file(config_path, scheduler_override);
+
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
 
     let hw_dir = resolve_path(base, &config.hardware_profiles_dir);
     let profiles = load_hardware_profiles(&hw_dir)?;
-
-    let workload_path = resolve_path(base, &config.workload.path);
-    let jobs = load_workload(&workload_path)?;
-    let jobs_total = jobs.len();
 
     let cluster = build_cluster(&config.cluster, &profiles)?;
     let hardware_names: Vec<String> = config
@@ -313,6 +442,13 @@ pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationRepor
         .iter()
         .flat_map(|n| n.gpus.iter().map(|g| g.profile.clone()))
         .collect();
+
+    let profiles_dir = resolve_path(base, &config.profiles_dir);
+    let model_profiles = load_model_profiles(&profiles_dir)?;
+
+    let workload_path = resolve_path(base, &config.workload.path);
+    let jobs = load_workload_with_profiles(&workload_path, &model_profiles, &hardware_names)?;
+    let jobs_total = jobs.len();
     let any_mig_capable = cluster.all_gpus().any(|g| g.mig_capable);
     let any_mig_job = jobs.iter().any(|j| j.is_mig_job());
     let mig_dir = resolve_path(base, &config.mig_profiles_dir);
@@ -329,7 +465,7 @@ pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationRepor
 
     let resource_manager = build_resource_manager(mig_registry, &config.scheduler.r#type);
 
-    let (cluster, metrics) = run_to_completion_with_policy(
+    let (cluster, metrics, snapshots) = run_to_completion_with_policy_snapshots(
         cluster,
         &config.scheduler.r#type,
         resource_manager,
@@ -337,11 +473,42 @@ pub fn run_simulation_report(config_path: &Path) -> ConfigResult<SimulationRepor
         jobs_total,
     )?;
 
+    let cost_path = resolve_path(base, "../analytics/cost.yaml");
+    let cost = load_cost_model(&cost_path).unwrap_or_default();
+    let benchmark = Some(SchedulerBenchmarkReport::from_simulation(
+        &scheduler_name,
+        &config_hash,
+        &cluster,
+        metrics.clone(),
+        &cost,
+    ));
+
     Ok(SimulationReport {
         metrics,
         timeline: JobsTimeline::from_cluster(&cluster),
         decisions: cluster.decision_log.clone(),
+        snapshots,
+        scheduler: scheduler_name,
+        config_hash,
+        benchmark,
     })
+}
+
+fn hash_config_file(config_path: &Path, scheduler_override: Option<&str>) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    let content = fs::read_to_string(config_path).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    scheduler_override.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn load_cost_model(path: &Path) -> ConfigResult<CostModel> {
+    if !path.exists() {
+        return Ok(CostModel::default());
+    }
+    let content = fs::read_to_string(path)?;
+    Ok(serde_yaml::from_str(&content)?)
 }
 
 pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
@@ -351,9 +518,6 @@ pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
     let hw_dir = resolve_path(base, &config.hardware_profiles_dir);
     let profiles = load_hardware_profiles(&hw_dir)?;
 
-    let workload_path = resolve_path(base, &config.workload.path);
-    let jobs = load_workload(&workload_path)?;
-
     let cluster = build_cluster(&config.cluster, &profiles)?;
     let hardware_names: Vec<String> = config
         .cluster
@@ -361,6 +525,13 @@ pub fn load_rl_session(config_path: &Path) -> ConfigResult<RlSession> {
         .iter()
         .flat_map(|n| n.gpus.iter().map(|g| g.profile.clone()))
         .collect();
+
+    let profiles_dir = resolve_path(base, &config.profiles_dir);
+    let model_profiles = load_model_profiles(&profiles_dir)?;
+
+    let workload_path = resolve_path(base, &config.workload.path);
+    let jobs = load_workload_with_profiles(&workload_path, &model_profiles, &hardware_names)?;
+
     let any_mig_capable = cluster.all_gpus().any(|g| g.mig_capable);
     let any_mig_job = jobs.iter().any(|j| j.is_mig_job());
     let mig_dir = resolve_path(base, &config.mig_profiles_dir);
@@ -400,30 +571,30 @@ pub fn build_resource_manager(
     }
 }
 
-fn run_to_completion_with_policy(
+fn run_to_completion_with_policy_snapshots(
     cluster: Cluster,
     scheduler: &str,
     resource_manager: ResourceManager,
     jobs: Vec<Job>,
     jobs_total: usize,
-) -> ConfigResult<(Cluster, SimulationMetrics)> {
+) -> ConfigResult<(Cluster, SimulationMetrics, Vec<ClusterSnapshot>)> {
     Ok(match scheduler {
-        "fifo" => run_to_completion(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
-        "priority" => run_to_completion(
+        "fifo" => run_to_completion_snapshots(cluster, FifoScheduler, resource_manager, jobs, jobs_total),
+        "priority" => run_to_completion_snapshots(
             cluster,
             PriorityScheduler,
             resource_manager,
             jobs,
             jobs_total,
         ),
-        "preemptive" | "forge" => run_to_completion(
+        "preemptive" | "forge" => run_to_completion_snapshots(
             cluster,
             ForgeScheduler::default(),
             resource_manager,
             jobs,
             jobs_total,
         ),
-        "bestfit" => run_to_completion(
+        "bestfit" => run_to_completion_snapshots(
             cluster,
             BestFitScheduler,
             resource_manager,
@@ -438,19 +609,34 @@ fn run_to_completion_with_policy(
     })
 }
 
-fn run_to_completion<S: Scheduler>(
+pub fn run_to_completion_with_policy(
+    cluster: Cluster,
+    scheduler: &str,
+    resource_manager: ResourceManager,
+    jobs: Vec<Job>,
+    jobs_total: usize,
+) -> ConfigResult<(Cluster, SimulationMetrics)> {
+    let (cluster, metrics, _snapshots) =
+        run_to_completion_with_policy_snapshots(cluster, scheduler, resource_manager, jobs, jobs_total)?;
+    Ok((cluster, metrics))
+}
+
+fn run_to_completion_snapshots<S: Scheduler>(
     cluster: Cluster,
     scheduler: S,
     resource_manager: ResourceManager,
     jobs: Vec<Job>,
     jobs_total: usize,
-) -> (Cluster, SimulationMetrics) {
-    let mut engine = SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager);
+) -> (Cluster, SimulationMetrics, Vec<ClusterSnapshot>) {
+    let mut engine =
+        SimulationEngine::with_resource_manager(cluster, scheduler, resource_manager).with_replay_capture();
     engine.submit_jobs(jobs);
     engine.run();
+    let snapshots = engine.take_replay_snapshots();
     (
         engine.cluster.clone(),
         SimulationMetrics::from_cluster(&engine.cluster, jobs_total),
+        snapshots,
     )
 }
 

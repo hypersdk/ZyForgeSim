@@ -415,3 +415,28 @@ fn integration_load_workload_rejects_invalid_gang_from_fixture() {
     }
     assert!(forgesim_config::load_workload(&path).is_err());
 }
+
+#[test]
+fn integration_inference_workload_reports_ttft_metrics() {
+    let cluster_config = repo_root().join("configs/clusters/inference_llama.yaml");
+    if !cluster_config.exists() {
+        return;
+    }
+    let report =
+        forgesim_config::run_simulation_report(&cluster_config).expect("inference simulation");
+    assert!(report.metrics.inference_jobs > 0);
+    assert!(report.metrics.ttft_p50 > 0.0);
+    assert!(report.benchmark.is_some());
+}
+
+#[test]
+fn integration_serving_trace_import_roundtrip() {
+    let trace_path = repo_root().join("tests/fixtures/traces/serving_llama.jsonl");
+    if !trace_path.exists() {
+        return;
+    }
+    let trace = forgesim_config::load_serving_trace(&trace_path).expect("load trace");
+    let jobs = forgesim_config::jobs_from_serving_trace(&trace, "srv");
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].model_id.as_deref(), Some("llama-70b"));
+}

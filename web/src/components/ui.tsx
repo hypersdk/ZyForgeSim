@@ -34,16 +34,23 @@ export function PageHero({
   kicker,
   title,
   subtitle,
+  actions,
 }: {
   kicker?: string;
   title: string;
   subtitle?: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="page-hero">
-      {kicker ? <p className="page-hero-kicker">{kicker}</p> : null}
-      <h1 className="page-hero-title">{title}</h1>
-      {subtitle ? <p className="page-hero-subtitle">{subtitle}</p> : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          {kicker ? <p className="page-hero-kicker">{kicker}</p> : null}
+          <h1 className="page-hero-title">{title}</h1>
+          {subtitle ? <p className="page-hero-subtitle">{subtitle}</p> : null}
+        </div>
+        {actions ? <div className="flex gap-2">{actions}</div> : null}
+      </div>
     </div>
   );
 }

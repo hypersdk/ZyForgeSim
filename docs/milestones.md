@@ -139,3 +139,25 @@ cargo run -p forgesim-cli -- run \
 pip install -e '.[viz]'
 python python/examples/plot_run.py outputs/jobs.json
 ```
+
+## Benchmark platform (P0–P10)
+
+Extends ForgeSim from GPU scheduler simulation into a platform connecting **scheduling decisions** to **LLM serving metrics** (TTFT, TPS, goodput), with AIPerf calibration and optional digital twin.
+
+| Phase | Status | Deliverable |
+|-------|--------|-------------|
+| **P0** | Planned | Scheduler override, replay fidelity, run metadata |
+| **P1** | Planned | Inference performance model — gate for TTFT/TPS |
+| **P2** | Planned | Synthetic LLM workload generator |
+| **P3** | Planned | `serving.trace.v1` import/export (separate from M3) |
+| **P4** | Planned | Scheduler benchmark score + cost model |
+| **P5** | Planned | Benchmark dashboard UI (`web/src/app/benchmark/`) |
+| **P6** | Planned | OpenAI-compatible virtual endpoint |
+| **P7** | Planned | AIPerf calibration import/export |
+| **P8** | Planned | What-if cluster/scheduler sweeps |
+| **P9** | Planned | Digital twin store + drift detection |
+| **P10** | Planned | CI performance regression gates |
+
+**Full roadmap:** [docs/benchmark_platform.md](benchmark_platform.md)
+
+**First demo target:** P1 + P7 + P5 — simulated vs measured TTFT/TPS on the dashboard.

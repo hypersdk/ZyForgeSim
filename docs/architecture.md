@@ -77,6 +77,25 @@ See [docs/ui_roadmap.md](ui_roadmap.md) for the full roadmap including Zyvor For
 
 **User guide:** [docs/ui_dashboard.md](ui_dashboard.md) — setup scripts, CLI dashboard, web dashboard, API reference, troubleshooting.
 
+## Benchmark platform (planned)
+
+ForgeSim is extending from scheduler simulation (M1–M8) into a three-layer **benchmark platform** that connects scheduling decisions to LLM serving metrics (TTFT, TPS, goodput), calibrated via AIPerf.
+
+```text
+Simulation Layer (Rust DES)  →  Benchmark Layer (traces, AIPerf, OpenAI shim)  →  Analytics Layer (dashboard, twin, CI)
+```
+
+**Roadmap:** [docs/benchmark_platform.md](benchmark_platform.md) — phased plan P0–P10, UI/tests per phase, multi-model review synthesis.
+
+| Phase | Focus |
+|-------|-------|
+| P0 | Simulation + web replay hardening |
+| P1 | Inference performance model (gate for TTFT/TPS) |
+| P2–P3 | Synthetic LLM workloads + serving trace I/O |
+| P4–P5 | Scheduler benchmark score + dashboard |
+| P6–P7 | OpenAI shim + AIPerf calibration |
+| P8–P10 | What-if, digital twin, CI regression gates |
+
 ## Design invariants
 
 - The Rust core never depends on Python or Gymnasium
@@ -96,3 +115,4 @@ See [docs/ui_roadmap.md](ui_roadmap.md) for the full roadmap including Zyvor For
 | M6 | Quotas, priority, preemption, gang spread + timeout, `ForgeScheduler`, `BestFitScheduler` |
 | M7 | Stepped RL session + Gymnasium env + PPO baseline |
 | M8 | Jobs timeline export + Gantt/heatmap viz |
+| **P0–P10** | **Benchmark platform** — inference model, AIPerf, twin, CI ([benchmark_platform.md](benchmark_platform.md)) |

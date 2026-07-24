@@ -49,3 +49,14 @@ Rich CLI dashboard    FastAPI (REST + WebSocket)
 | Live | Forge export → `ClusterSnapshot` mapping |
 
 Long-term vision: **Grafana meets Kubernetes Dashboard meets DCGM — focused on AI scheduling**.
+
+## Phase 4 — Benchmark dashboard (planned)
+
+Extends Phase 2 web UI — not a separate app. See [benchmark_platform.md](benchmark_platform.md).
+
+| Route (planned) | Purpose |
+|-----------------|---------|
+| `/benchmark` | TTFT, TPS, goodput, sim vs measured (AIPerf) |
+| `/what-if` | Cluster/scheduler sweep matrix |
+
+Backend: inference metrics from P1, AIPerf import from P7, compare/score from P4.

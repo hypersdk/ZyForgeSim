@@ -747,6 +747,7 @@ mod tests {
             topology_penalties: 0,
             topology_runtime_inflation: 0.0,
             jobs_failed: 1,
+            ..Default::default()
         };
         let report = compare_schedules(&oracle, &simulated, "fifo", metrics, &[failed]);
         assert_eq!(report.simulated_failures, vec!["j1".to_string()]);

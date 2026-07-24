@@ -2,6 +2,7 @@ use crate::cluster::Cluster;
 use crate::events::{Event, EventKind, EventQueue};
 use crate::models::{Job, JobState, Placement};
 use crate::resource::ResourceManager;
+use crate::snapshot::{ClusterSnapshot, DEFAULT_OBS_TOP_K};
 
 pub trait Scheduler {
     fn schedule(
@@ -19,6 +20,8 @@ pub struct SimulationEngine<S: Scheduler> {
     pending_arrivals: Vec<Job>,
     /// Extra delay applied when restarting a previously preempted job.
     pub preemption_restart_penalty_secs: f64,
+    replay_snapshots: Vec<ClusterSnapshot>,
+    capture_replay: bool,
 }
 
 impl<S: Scheduler> SimulationEngine<S> {
@@ -38,7 +41,32 @@ impl<S: Scheduler> SimulationEngine<S> {
             event_queue: EventQueue::new(),
             pending_arrivals: Vec::new(),
             preemption_restart_penalty_secs: 0.0,
+            replay_snapshots: Vec::new(),
+            capture_replay: false,
         }
+    }
+
+    pub fn with_replay_capture(mut self) -> Self {
+        self.capture_replay = true;
+        self
+    }
+
+    pub fn take_replay_snapshots(&mut self) -> Vec<ClusterSnapshot> {
+        std::mem::take(&mut self.replay_snapshots)
+    }
+
+    fn maybe_capture_replay_snapshot(&mut self) {
+        if !self.capture_replay {
+            return;
+        }
+        let mask: Vec<bool> = self
+            .cluster
+            .waiting_queue
+            .iter()
+            .map(|job| self.resource_manager.can_place(&self.cluster, job))
+            .collect();
+        self.replay_snapshots
+            .push(ClusterSnapshot::from_cluster(&self.cluster, DEFAULT_OBS_TOP_K, &mask));
     }
 
     pub fn with_preemption_restart_penalty(mut self, secs: f64) -> Self {
@@ -136,6 +164,7 @@ impl<S: Scheduler> SimulationEngine<S> {
             )
             .with_job(&job.id, &job.name),
         );
+        self.maybe_capture_replay_snapshot();
         self.cluster.enqueue_job(job);
         self.try_schedule();
     }
@@ -157,6 +186,7 @@ impl<S: Scheduler> SimulationEngine<S> {
                     .with_job(&job.id, &job.name),
                 );
             }
+            self.maybe_capture_replay_snapshot();
             self.try_schedule();
         }
     }
@@ -180,6 +210,7 @@ impl<S: Scheduler> SimulationEngine<S> {
                 .with_gpus(job.assigned_gpus.clone()),
             );
         }
+        self.maybe_capture_replay_snapshot();
         self.try_schedule();
     }
 
@@ -216,6 +247,7 @@ impl<S: Scheduler> SimulationEngine<S> {
                     .with_job(&job.id, &job.name)
                     .with_gpus(placement.gpu_ids.clone()),
                 );
+                self.maybe_capture_replay_snapshot();
                 self.event_queue.push(Event {
                     time: placement.start_time + duration,
                     kind: EventKind::JobComplete,
