@@ -435,6 +435,174 @@ body {
     padding: 1rem;
   }
 
+  .compare-metrics-grid {
+    display: grid;
+    gap: 0.625rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compare-metric-better .metric-tile {
+    border-left-color: var(--hs-success);
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(255, 255, 255, 0.01));
+  }
+
+  .compare-metric-worse .metric-tile {
+    border-left-color: var(--hs-text-subtle);
+    opacity: 0.85;
+  }
+
+  .metrics-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (min-width: 768px) {
+    .metrics-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  .run-detail-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .run-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 0.35rem;
+  }
+
+  .run-detail-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--hs-purple-light);
+  }
+
+  .run-detail-live::before {
+    content: "";
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--hs-purple-light);
+    box-shadow: 0 0 8px rgba(167, 139, 250, 0.8);
+    animation: pulse-live 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse-live {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  .run-error-banner {
+    margin-bottom: 1rem;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--hs-error) 35%, var(--hs-border));
+    background: rgba(239, 68, 68, 0.08);
+    padding: 0.875rem 1rem;
+    font-size: 0.875rem;
+    color: var(--hs-error-light);
+  }
+
+  .run-detail-grid {
+    display: grid;
+    gap: 1.25rem;
+    margin-top: 1.25rem;
+  }
+
+  @media (min-width: 1024px) {
+    .run-detail-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .run-detail-span-2 {
+    grid-column: 1 / -1;
+  }
+
+  .decision-panel {
+    border-radius: 12px;
+    border: 1px solid var(--hs-border);
+    background: color-mix(in srgb, var(--hs-surface-code) 60%, transparent);
+    padding: 0.875rem 1rem;
+  }
+
+  .decision-panel-preempted {
+    border-color: color-mix(in srgb, var(--hs-error) 35%, var(--hs-border));
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(255, 255, 255, 0.01));
+  }
+
+  .decision-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--hs-radius-pill);
+    padding: 0.15rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--hs-border);
+    background: var(--hs-surface);
+    color: var(--hs-text-muted);
+  }
+
+  .decision-badge-scheduled {
+    border-color: color-mix(in srgb, var(--hs-success) 35%, var(--hs-border));
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--hs-success-light);
+  }
+
+  .decision-badge-arrival {
+    border-color: color-mix(in srgb, var(--hs-indigo) 35%, var(--hs-border));
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--hs-purple-light);
+  }
+
+  .decision-badge-complete {
+    border-color: color-mix(in srgb, var(--hs-accent) 35%, var(--hs-border));
+    background: rgba(240, 88, 58, 0.1);
+    color: var(--hs-accent-light);
+  }
+
+  .decision-badge-preempted {
+    border-color: color-mix(in srgb, var(--hs-error) 35%, var(--hs-border));
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--hs-error-light);
+  }
+
+  .decision-badge-timeout {
+    border-color: color-mix(in srgb, #f59e0b 35%, var(--hs-border));
+    background: rgba(245, 158, 11, 0.12);
+    color: #fbbf24;
+  }
+
+  .compare-hint {
+    margin-top: 0.875rem;
+    border-radius: var(--hs-radius);
+    border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--hs-border));
+    background: rgba(245, 158, 11, 0.08);
+    padding: 0.625rem 0.875rem;
+    font-size: 0.8125rem;
+    color: #fbbf24;
+  }
+
   .login-panel {
     border-radius: var(--hs-radius-xl);
     border: 1px solid var(--hs-border);

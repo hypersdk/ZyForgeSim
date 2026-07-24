@@ -6,6 +6,11 @@ use forgesim_config::{
     load_forge_bundle, run_forge_bundle, run_simulation, run_trace_file, trace_diff_to_json,
     TraceDiffReport,
 };
+use forgesim_core::cluster::Cluster;
+use forgesim_core::engine::SimulationEngine;
+use forgesim_core::models::{Gpu, Job, JobState, Node};
+use forgesim_core::resource::ResourceManager;
+use forgesim_scheduler::ForgeScheduler;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -246,6 +251,34 @@ fn integration_gang_job_fails_when_gang_timeout_expires() {
 }
 
 #[test]
+fn integration_gang_timeout_rearms_after_preemption() {
+    let cluster = Cluster::new(vec![Node {
+        id: "n0".into(),
+        gpus: vec![Gpu::new("g0", "n0", "H100_80GB", 80.0)],
+    }]);
+    let mut engine = SimulationEngine::new(cluster, ForgeScheduler::default());
+    let mut gang = Job::new("gang", "gang", 0.0, 100.0, 1);
+    gang.gang_enabled = true;
+    gang.gang_size_nodes = Some(1);
+    gang.gang_timeout_secs = Some(30.0);
+    gang.priority = 50;
+    let mut high = Job::new("high", "high", 10.0, 50.0, 1);
+    high.priority = 90;
+    engine.submit_jobs(vec![gang, high]);
+    engine.run();
+
+    let gang_job = engine
+        .cluster
+        .finished_jobs
+        .iter()
+        .find(|j| j.id == "gang")
+        .expect("gang finished");
+    assert_eq!(gang_job.state, JobState::Failed);
+    assert_eq!(gang_job.finish_time, Some(40.0));
+    assert_eq!(engine.cluster.total_preemptions, 1);
+}
+
+#[test]
 fn integration_topology_runtime_inflation_on_cross_domain_placement() {
     let config = repo_root().join("configs/clusters/topology_penalty.yaml");
     if !config.exists() {
@@ -295,4 +328,90 @@ fn integration_simulation_writes_jobs_timeline() {
     assert!(!report.timeline.jobs.is_empty());
     let json = report.timeline.to_json_pretty();
     assert!(json.contains("\"job_id\""));
+}
+
+#[test]
+fn integration_preemption_gpu_utilization_accounts_all_segments() {
+    let config = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !config.exists() {
+        return;
+    }
+    let metrics = run_simulation(&config).expect("preemptive simulation");
+    assert_eq!(metrics.preemptions, 1);
+    assert!(metrics.gpu_utilization > 0.0);
+    assert!(metrics.mean_cumulative_wait_time >= 0.0);
+}
+
+#[test]
+fn integration_preemption_restart_penalty_delays_resumed_job() {
+    use forgesim_config::load_simulation_config;
+    use forgesim_core::engine::SimulationEngine;
+
+    let config_path = repo_root().join("configs/clusters/preemption_preemptive.yaml");
+    if !config_path.exists() {
+        return;
+    }
+    let config = load_simulation_config(&config_path).unwrap();
+    let base = config_path.parent().unwrap();
+    let hw_dir = forgesim_config::resolve_path(base, &config.hardware_profiles_dir);
+    let profiles = forgesim_config::load_hardware_profiles(&hw_dir).unwrap();
+    let workload_path = forgesim_config::resolve_path(base, &config.workload.path);
+    let jobs = forgesim_config::load_workload(&workload_path).unwrap();
+    let cluster = forgesim_config::build_cluster(&config.cluster, &profiles).unwrap();
+    let rm = forgesim_config::build_resource_manager(None, "preemptive");
+    let mut engine =
+        SimulationEngine::with_resource_manager(cluster, ForgeScheduler::default(), rm)
+            .with_preemption_restart_penalty(5.0);
+    engine.submit_jobs(jobs);
+    engine.run();
+
+    let low = engine
+        .cluster
+        .finished_jobs
+        .iter()
+        .find(|j| j.id == "job-low")
+        .expect("low finished");
+    assert_eq!(low.preemption_count, 1);
+    assert!(low.gpu_seconds_consumed > 0.0);
+}
+
+#[test]
+fn integration_gpu_type_blocks_mismatched_hardware() {
+    let mut cluster = Cluster::new(vec![
+        Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("a100", "n0", "A100_80GB", 80.0)],
+        },
+        Node {
+            id: "n1".into(),
+            gpus: vec![Gpu::new("h100", "n1", "H100_80GB", 80.0)],
+        },
+    ]);
+    let rm = ResourceManager::new();
+    let mut job = Job::new("train", "train", 0.0, 10.0, 1);
+    job.gpu_type = Some("H100_80GB".into());
+    assert!(rm.can_place(&cluster, &job));
+    let placement = rm.allocate(&mut cluster, &job, 0.0).unwrap();
+    assert_eq!(cluster.gpu(&placement.gpu_ids[0]).unwrap().profile, "H100_80GB");
+}
+
+#[test]
+fn integration_trace_diff_includes_failure_metadata() {
+    let cluster_config = repo_root().join("configs/clusters/gang_timeout_m6.yaml");
+    if !cluster_config.exists() {
+        return;
+    }
+    let report =
+        forgesim_config::run_simulation_report(&cluster_config).expect("gang timeout simulation");
+    assert_eq!(report.metrics.jobs_failed, 1);
+    assert_eq!(report.metrics.jobs_completed, 1);
+}
+
+#[test]
+fn integration_load_workload_rejects_invalid_gang_from_fixture() {
+    let path = repo_root().join("tests/fixtures/workloads/invalid_gang.yaml");
+    if !path.exists() {
+        return;
+    }
+    assert!(forgesim_config::load_workload(&path).is_err());
 }

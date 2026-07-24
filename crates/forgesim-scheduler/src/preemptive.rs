@@ -261,4 +261,76 @@ mod tests {
         assert_eq!(cluster.free_gpu_count(), 0);
         assert_eq!(cluster.waiting_queue.len(), 1);
     }
+
+    #[test]
+    fn records_job_preempted_decision() {
+        let mut cluster = one_gpu_cluster();
+        cluster.clock = 10.0;
+        let mut low = Job::new("low", "low", 0.0, 100.0, 1);
+        low.priority = 10;
+        cluster.start_job(low, &["g0".into()], 0.0);
+
+        let mut high = Job::new("high", "high", 10.0, 20.0, 1);
+        high.priority = 90;
+        cluster.enqueue_job(high);
+
+        let mut sched = PreemptivePriorityScheduler::default();
+        let rm = ResourceManager::new();
+        sched.schedule(&mut cluster, &rm);
+
+        assert!(cluster.decision_log.iter().any(|d| d.kind == "job_preempted"));
+    }
+
+    #[test]
+    fn quota_aware_preemption_does_not_evict_other_tenant() {
+        let mut cluster = one_gpu_cluster();
+        cluster.clock = 10.0;
+        let mut victim = Job::new("victim", "victim", 0.0, 100.0, 1);
+        victim.priority = 10;
+        victim.tenant = Some("team-a".into());
+        cluster.start_job(victim, &["g0".into()], 0.0);
+
+        let mut high = Job::new("high", "high", 10.0, 20.0, 1);
+        high.priority = 90;
+        high.tenant = Some("team-b".into());
+        cluster.enqueue_job(high);
+
+        let mut sched = PreemptivePriorityScheduler {
+            quota_aware_preemption: true,
+            ..Default::default()
+        };
+        let rm = ResourceManager::new();
+        let placements = sched.schedule(&mut cluster, &rm);
+
+        assert!(placements.is_empty());
+        assert!(cluster.running_jobs.contains_key("victim"));
+    }
+
+    #[test]
+    fn preemption_rearms_gang_timeout_for_gang_victim() {
+        let mut cluster = one_gpu_cluster();
+        cluster.clock = 10.0;
+        let mut gang = Job::new("gang", "gang", 0.0, 100.0, 1);
+        gang.priority = 10;
+        gang.gang_enabled = true;
+        gang.gang_size_nodes = Some(1);
+        gang.gang_timeout_secs = Some(30.0);
+        cluster.start_job(gang, &["g0".into()], 0.0);
+
+        let mut high = Job::new("high", "high", 10.0, 20.0, 1);
+        high.priority = 90;
+        cluster.enqueue_job(high);
+
+        let mut sched = PreemptivePriorityScheduler::default();
+        let rm = ResourceManager::new();
+        sched.schedule(&mut cluster, &rm);
+
+        assert!(cluster.gang_timeout_rearm_ids.contains(&"gang".to_string()));
+        let requeued = cluster
+            .waiting_queue
+            .iter()
+            .find(|j| j.id == "gang")
+            .expect("gang requeued");
+        assert_eq!(requeued.gang_deadline, Some(40.0));
+    }
 }

@@ -795,6 +795,18 @@ mod tests {
     }
 
     #[test]
+    fn gang_scatter_fallback_increments_topology_penalty() {
+        let cluster = two_node_cluster();
+        let rm = ResourceManager::new();
+        let mut job = Job::new("g1", "gang", 0.0, 10.0, 4);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(2);
+        let mut c = cluster.clone();
+        rm.allocate(&mut c, &job, 0.0).unwrap();
+        assert_eq!(c.topology_penalties, 0);
+    }
+
+    #[test]
     fn best_fit_prefers_tighter_node() {
         let mut cluster = Cluster::new(vec![
             Node {

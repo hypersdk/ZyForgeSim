@@ -387,4 +387,40 @@ mod tests {
             .running_job_id
             .is_none());
     }
+
+    #[test]
+    fn enqueue_job_tracks_queue_max_length() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        assert_eq!(cluster.queue_max_length, 0);
+        cluster.enqueue_job(Job::new("j1", "a", 0.0, 10.0, 1));
+        cluster.enqueue_job(Job::new("j2", "b", 0.0, 10.0, 1));
+        assert_eq!(cluster.queue_max_length, 2);
+    }
+
+    #[test]
+    fn finish_job_records_gpu_seconds_from_final_segment() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 2);
+        job.gpu_seconds_consumed = 40.0;
+        cluster.start_job(job, &["gpu-0".into()], 10.0);
+        let finished = cluster.finish_job("j1", 25.0).expect("was running");
+        assert!((finished.gpu_seconds_consumed - 70.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn start_job_records_cumulative_wait_and_invalidates_gang_timeout() {
+        let mut cluster = Cluster::new(vec![sample_node()]);
+        let mut job = Job::new("g1", "gang", 0.0, 10.0, 1);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(1);
+        job.gang_timeout_secs = Some(60.0);
+        job.gang_deadline = Some(60.0);
+        job.gang_timeout_generation = 1;
+        job.enter_waiting(0.0);
+        cluster.start_job(job, &["gpu-0".into()], 15.0);
+        let running = cluster.running_jobs.get("g1").expect("running");
+        assert_eq!(running.cumulative_wait_secs, 15.0);
+        assert!(running.gang_deadline.is_none());
+        assert_eq!(running.gang_timeout_generation, 2);
+    }
 }
