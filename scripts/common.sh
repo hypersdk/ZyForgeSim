@@ -11,31 +11,70 @@ fix_homebrew_pyexpat() {
 # Homebrew python@3.13 links pyexpat against Homebrew expat but the loader often
 # picks /usr/lib/libexpat.1.dylib. Wrap venv interpreters so pip/maturin inherit
 # the correct library path even when DYLD_* is stripped from the parent shell.
+venv_python_wrapper_broken() {
+  local venv="${1:-}"
+  local py313="$venv/bin/python3.13"
+  local target="$venv/bin/python3.13.bin"
+  [[ -f "$py313" && ! -L "$py313" ]] || return 1
+  grep -q "ForgeSim: Homebrew pyexpat wrapper" "$py313" 2>/dev/null || return 1
+  [[ -e "$target" ]] || return 0
+  if [[ -f "$target" && ! -L "$target" ]] && grep -q "ForgeSim: Homebrew pyexpat wrapper" "$target" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+repair_venv_python_wrapper() {
+  local venv="${1:-}"
+  local py313="$venv/bin/python3.13"
+  local target="$venv/bin/python3.13.bin"
+  local base_python=""
+
+  for candidate in python3.13 python3.12 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      base_python="$(command -v "$candidate")"
+      break
+    fi
+  done
+
+  if [[ -z "$base_python" ]]; then
+    return 1
+  fi
+
+  rm -f "$py313" "${py313}.real" "$target"
+  ln -sf "$base_python" "$target"
+  return 0
+}
+
 wrap_venv_python_for_pyexpat() {
   local venv="${1:-}"
   [[ -n "$venv" ]] || return 0
   local py313="$venv/bin/python3.13"
-  [[ -e "$py313" ]] || return 0
+  local target="$venv/bin/python3.13.bin"
+  [[ -e "$py313" || -e "$target" ]] || return 0
 
-  local real_py=""
-  if [[ -L "$py313" ]]; then
-    real_py="$(readlink "$py313")"
-  elif [[ -f "$py313.real" ]]; then
-    real_py="$(readlink "$py313.real" 2>/dev/null || true)"
-    [[ -n "$real_py" ]] || real_py="$py313.real"
-  else
+  if venv_python_wrapper_broken "$venv"; then
+    repair_venv_python_wrapper "$venv" || return 1
+  fi
+
+  if [[ -f "$py313" && ! -L "$py313" ]] && grep -q "ForgeSim: Homebrew pyexpat wrapper" "$py313" 2>/dev/null; then
+    [[ -e "$target" ]] || repair_venv_python_wrapper "$venv"
     return 0
   fi
 
-  if [[ "$real_py" != /* ]]; then
-    real_py="$venv/bin/$real_py"
+  if [[ ! -e "$target" ]]; then
+    if [[ -L "$py313" ]]; then
+      mv "$py313" "$target"
+    elif [[ -L "${py313}.real" ]]; then
+      mv "${py313}.real" "$target"
+    elif [[ -x "$py313" ]]; then
+      mv "$py313" "$target"
+    else
+      return 0
+    fi
   fi
 
-  if [[ -f "$py313" && ! -L "$py313" ]] && head -1 "$py313" | grep -q "ForgeSim: Homebrew pyexpat wrapper"; then
-    return 0
-  fi
-
-  mv -f "$py313" "${py313}.real"
+  rm -f "$py313" "${py313}.real"
   cat >"$py313" <<'EOF'
 #!/usr/bin/env bash
 # ForgeSim: Homebrew pyexpat wrapper
@@ -44,7 +83,7 @@ if [[ -d /opt/homebrew/opt/expat/lib ]]; then
 elif [[ -d /usr/local/opt/expat/lib ]]; then
   export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 fi
-exec "$(dirname "$0")/python3.13.real" "$@"
+exec "$(dirname "$0")/python3.13.bin" "$@"
 EOF
   chmod +x "$py313"
 }

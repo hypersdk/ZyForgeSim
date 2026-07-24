@@ -4,56 +4,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=common.sh
+source "$ROOT/scripts/common.sh"
 
 VENV="$ROOT/.venv"
 PY="$VENV/bin/python"
 GET_PIP="$ROOT/scripts/get-pip.py"
-
-# Homebrew python@3.13 often links pyexpat against Homebrew expat, but the
-# dynamic loader picks /usr/lib/libexpat.1.dylib unless we prepend Homebrew's lib.
-fix_homebrew_pyexpat() {
-  if [[ -d /opt/homebrew/opt/expat/lib ]]; then
-    export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-  elif [[ -d /usr/local/opt/expat/lib ]]; then
-    export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-  fi
-}
-
-wrap_venv_python_for_pyexpat() {
-  local py313="$VENV/bin/python3.13"
-  [[ -e "$py313" ]] || return 0
-
-  local real_py=""
-  if [[ -L "$py313" ]]; then
-    real_py="$(readlink "$py313")"
-  elif [[ -f "${py313}.real" ]]; then
-    real_py="$(readlink "${py313}.real" 2>/dev/null || true)"
-    [[ -n "$real_py" ]] || real_py="${py313}.real"
-  else
-    return 0
-  fi
-
-  if [[ "$real_py" != /* ]]; then
-    real_py="$VENV/bin/$real_py"
-  fi
-
-  if [[ -f "$py313" && ! -L "$py313" ]] && head -1 "$py313" | grep -q "ForgeSim: Homebrew pyexpat wrapper"; then
-    return 0
-  fi
-
-  mv -f "$py313" "${py313}.real"
-  cat >"$py313" <<'EOF'
-#!/usr/bin/env bash
-# ForgeSim: Homebrew pyexpat wrapper
-if [[ -d /opt/homebrew/opt/expat/lib ]]; then
-  export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-elif [[ -d /usr/local/opt/expat/lib ]]; then
-  export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-fi
-exec "$(dirname "$0")/python3.13.real" "$@"
-EOF
-  chmod +x "$py313"
-}
 
 patch_activate() {
   local activate="$VENV/bin/activate"
@@ -114,21 +70,21 @@ EOF
 }
 
 venv_has_pip() {
-  [[ -x "$PY" ]] && "$PY" -c "import pip" >/dev/null 2>&1
+  [[ -x "$PY" || -L "$PY" ]] && "$PY" -c "import pip" >/dev/null 2>&1
 }
 
-ensure_pip_shims() {
-  cat >"$VENV/bin/pip" <<'EOF'
-#!/usr/bin/env bash
-if [[ -d /opt/homebrew/opt/expat/lib ]]; then
-  export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-elif [[ -d /usr/local/opt/expat/lib ]]; then
-  export DYLD_LIBRARY_PATH="/usr/local/opt/expat/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-fi
-exec "$(dirname "$0")/python" -m pip "$@"
-EOF
-  chmod +x "$VENV/bin/pip"
-  ln -sf pip "$VENV/bin/pip3"
+prepare_existing_venv() {
+  if [[ ! -e "$PY" && ! -L "$PY" ]]; then
+    return 0
+  fi
+
+  echo "Checking existing .venv..."
+  if venv_python_wrapper_broken "$VENV"; then
+    echo "Repairing broken python wrapper (was looping on python3.13.real)..."
+    repair_venv_python_wrapper "$VENV"
+  fi
+  wrap_venv_python_for_pyexpat "$VENV"
+  ensure_pip_shims "$VENV"
 }
 
 bootstrap_pip() {
@@ -160,8 +116,7 @@ create_venv_with_uv() {
   uv venv --python 3.12 "$VENV"
   patch_activate
   uv pip install --python "$PY" pip setuptools wheel rich pyyaml maturin
-  ensure_pip_shims
-  wrap_venv_python_for_pyexpat
+  ensure_pip_shims "$VENV"
 }
 
 create_venv() {
@@ -170,9 +125,9 @@ create_venv() {
   rm -rf "$VENV"
   "$base_python" -m venv --without-pip "$VENV"
   patch_activate
-  wrap_venv_python_for_pyexpat
+  wrap_venv_python_for_pyexpat "$VENV"
   bootstrap_pip
-  ensure_pip_shims
+  ensure_pip_shims "$VENV"
 }
 
 ensure_venv() {
@@ -195,13 +150,15 @@ ensure_venv() {
 
   require_pyexpat "$base_python"
 
-  if [[ ! -x "$PY" ]] || [[ ! -f "$VENV/bin/activate" ]] || ! venv_has_pip; then
+  prepare_existing_venv
+
+  if [[ ! -x "$PY" && ! -L "$PY" ]] || [[ ! -f "$VENV/bin/activate" ]] || ! venv_has_pip; then
     create_venv "$base_python"
   fi
 
   require_pyexpat "$PY"
-  ensure_pip_shims
-  wrap_venv_python_for_pyexpat
+  wrap_venv_python_for_pyexpat "$VENV"
+  ensure_pip_shims "$VENV"
   patch_activate
 
   echo "Installing Python deps (rich, pyyaml, maturin)..."
@@ -233,7 +190,7 @@ install_rust_extension() {
   export VIRTUAL_ENV="$VENV"
   export PATH="$VENV/bin:$PATH"
   fix_homebrew_pyexpat
-  wrap_venv_python_for_pyexpat
+  wrap_venv_python_for_pyexpat "$VENV"
 
   if "$maturin_bin" develop; then
     return 0
