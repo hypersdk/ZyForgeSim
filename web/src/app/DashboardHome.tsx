@@ -17,6 +17,9 @@ export function DashboardHome() {
   >([]);
   const [busy, setBusy] = useState(false);
 
+  const sameCompareConfig = Boolean(compareA && compareB && compareA === compareB);
+  const canCompare = Boolean(compareA && compareB && compareA !== compareB);
+
   const refresh = useCallback(async () => {
     const [cfgs, runList] = await Promise.all([fetchConfigs(), fetchRuns()]);
     setConfigs(cfgs);
@@ -29,6 +32,10 @@ export function DashboardHome() {
     const t = setInterval(() => refresh().catch(console.error), 3000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    if (sameCompareConfig) setCompareResults([]);
+  }, [sameCompareConfig]);
 
   async function handleRun() {
     if (!selected) return;
@@ -43,7 +50,7 @@ export function DashboardHome() {
   }
 
   async function handleCompare() {
-    if (!compareA || !compareB) return;
+    if (!compareA || !compareB || compareA === compareB) return;
     setBusy(true);
     try {
       const { results } = await compareConfigs([compareA, compareB]);
@@ -119,13 +126,13 @@ export function DashboardHome() {
           )}
         </Card>
 
-        <Card title="Compare Two Configs" description="Run both configs and compare makespan and GPU utilization.">
+        <Card title="Compare Two Configs" description="Run both configs and compare scheduling metrics side by side.">
           <div className="form-row">
             <FormField label="Config A">
               <Select value={compareA} onChange={(e) => setCompareA(e.target.value)}>
                 <option value="">Select config…</option>
                 {configs.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} disabled={c.id === compareB}>
                     {c.id}
                   </option>
                 ))}
@@ -135,16 +142,19 @@ export function DashboardHome() {
               <Select value={compareB} onChange={(e) => setCompareB(e.target.value)}>
                 <option value="">Select config…</option>
                 {configs.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} disabled={c.id === compareA}>
                     {c.id}
                   </option>
                 ))}
               </Select>
             </FormField>
-            <Button variant="secondary" disabled={busy || !compareA || !compareB} onClick={handleCompare}>
+            <Button variant="secondary" disabled={busy || !canCompare} onClick={handleCompare}>
               Compare
             </Button>
           </div>
+          {sameCompareConfig ? (
+            <p className="compare-hint">Choose two different configs — comparing the same file won&apos;t show any difference.</p>
+          ) : null}
           <ComparePanel results={compareResults} />
         </Card>
       </div>

@@ -268,6 +268,43 @@ mod job_tests {
         job.requeue_after_preemption(25.0);
         assert_eq!(job.gpu_seconds_consumed, 50.0);
     }
+
+    #[test]
+    fn account_wait_until_accumulates_queue_time_only() {
+        let mut job = Job::new("j1", "a", 5.0, 100.0, 1);
+        job.enter_waiting(5.0);
+        job.account_wait_until(20.0);
+        assert_eq!(job.cumulative_wait_secs, 15.0);
+        assert_eq!(job.time_to_first_start, Some(20.0));
+
+        job.enter_waiting(50.0);
+        job.account_wait_until(80.0);
+        assert_eq!(job.cumulative_wait_secs, 45.0);
+    }
+
+    #[test]
+    fn requeue_after_preemption_sets_gang_deadline() {
+        let mut job = Job::new("g1", "gang", 0.0, 100.0, 1);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(1);
+        job.gang_timeout_secs = Some(30.0);
+        job.start_time = Some(0.0);
+        job.requeue_after_preemption(10.0);
+
+        assert_eq!(job.gang_deadline, Some(40.0));
+        assert_eq!(job.gang_timeout_generation, 1);
+        assert_eq!(job.waiting_since, Some(10.0));
+    }
+
+    #[test]
+    fn cumulative_wait_time_excludes_running_segments() {
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.enter_waiting(0.0);
+        job.account_wait_until(10.0);
+        job.start_time = Some(10.0);
+        assert_eq!(job.cumulative_wait_time(), 10.0);
+        assert_eq!(job.wait_time(), 10.0);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

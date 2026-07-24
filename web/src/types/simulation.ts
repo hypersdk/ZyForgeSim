@@ -1,10 +1,12 @@
 export interface SimulationMetrics {
   makespan: number;
   mean_wait_time: number;
+  mean_cumulative_wait_time?: number;
   gpu_utilization: number;
   jobs_completed: number;
   jobs_total: number;
   queue_max_length: number;
+  jobs_unschedulable?: number;
   mig_reconfigs: number;
   preemptions: number;
   topology_penalties: number;

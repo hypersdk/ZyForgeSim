@@ -10,8 +10,9 @@ grouping with scatter fallback, `topology_penalties`, and
 
 Implemented in `forgesim-core`:
 
-- `Gpu.nvlink_group: Option<u32>` — set by `ForgeBundleAdapter` as `i / 2`
-  (pairs GPUs 0-1, 2-3, …) until Forge exports real topology.
+- `Gpu.nvlink_group: Option<u32>` — set from cluster `topology_template`
+  (`nvlink_pairs`, `full_mesh`, `pcie_only`) or explicit GPU spec; Forge
+  bundle still defaults to `i / 2` pairing when no template is set.
 - `HardwareProfile.nvlink_bw_gbs` / `pcie_bw_gbs` — feed `TopologyGraph` for
   runtime inflation when jobs span NVLink domains or nodes.
 - `Job.network_bw_gbps` — jobs with this set (or `gang_enabled`) prefer
@@ -27,34 +28,26 @@ graph derived from `FabricGpuNode`, and make placement locality-aware so
 ForgeSim can answer: *does this scheduler colocate gang/distributed jobs on
 well-connected GPUs, and does that matter for runtime?*
 
-## Open questions (need answers before implementation)
+## Resolved decisions
 
-1. **Where does real topology come from?** `FabricGpuNode.spec` today only
-   has `nodeName`, `gpuCount`, `gpuType`, `memoryGB` (`docs/forge_input.md`).
-   Does Forge export per-GPU NVLink adjacency, or just a topology *class*
-   (e.g. "NVSwitch full-mesh" vs "PCIe-only")? If Forge doesn't expose this
-   yet, M5 may need a synthetic topology generator (e.g. "8 GPUs/node,
-   NVSwitch full mesh" as a hardware-profile-level assumption) rather than
-   reading it from CRDs.
-2. **Graph granularity**: per-GPU adjacency (accurate, more state) vs.
-   per-node "NVLink domain" grouping (matches existing `nvlink_group`,
-   cheaper). Recommend starting with domain-level grouping since that's what
-   `nvlink_group` already models — extending to per-GPU adjacency is a
-   later refinement if domain-level proves insufficient.
-3. **Scoring vs. hard constraint**: should the scheduler *require* gang jobs
-   to fit within one NVLink domain (reject/wait otherwise), or just prefer
-   it and fall back to cross-domain placement with a runtime penalty? The
-   latter needs a cost model (e.g. inflate `runtime` when GPUs span domains
-   at less than `network_bw_gbps`); the former is simpler but may starve
-   jobs on fragmented clusters.
-4. **Where does this live?** Likely a new `Topology` type in
-   `forgesim-core` (graph over `Node`/`Gpu`) plus a `ResourceManager` change
-   to make placement topology-aware, plus a scheduler-visible cost/penalty —
-   touches `resource.rs`, `cluster.rs`, `forge_bundle.rs`, and whichever
-   scheduler(s) opt into locality-aware placement.
-5. **Metrics**: `forgesim-metrics` would need a new signal (e.g. "% of
-   distributed jobs placed within a single NVLink domain") to make M5
-   observable in `forge-sim run` output.
+1. **Topology source**: synthetic templates via `ClusterConfig.topology_template`
+   until Forge exports per-GPU adjacency from CRDs.
+2. **Graph granularity**: domain-level `nvlink_group` (implemented); per-GPU
+   adjacency is a future refinement.
+3. **Scoring vs. hard constraint**: prefer same domain, fall back with
+   `topology_penalties` and `runtime_multiplier` inflation (implemented).
+4. **Location**: `TopologyGraph` in `forgesim-core`, placement in
+   `ResourceManager`, gang spread uses NVLink-aware per-node GPU pick.
+
+## Future refinements
+
+- Real adjacency from Forge CRDs when available.
+- Per-GPU topology graph for NVSwitch mesh modeling.
+- Optional hard constraint mode (reject cross-domain placement).
+
+## Open questions (historical — see Resolved decisions above)
+
+1. ~~**Where does real topology come from?**~~ Synthetic templates for now.
 
 ## Suggested first slice
 

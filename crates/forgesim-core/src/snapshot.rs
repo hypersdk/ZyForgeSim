@@ -211,3 +211,42 @@ impl ClusterSnapshot {
 pub fn obs_size(top_k: usize) -> usize {
     5 + top_k * 7
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::Cluster;
+    use crate::models::{Gpu, Job, Node};
+
+    #[test]
+    fn obs_size_matches_feature_vector_length() {
+        let top_k = 4;
+        assert_eq!(obs_size(top_k), 5 + top_k * 7);
+    }
+
+    #[test]
+    fn job_current_cumulative_wait_includes_active_waiting_time() {
+        let mut job = Job::new("j1", "a", 0.0, 10.0, 1);
+        job.cumulative_wait_secs = 5.0;
+        job.waiting_since = Some(10.0);
+        assert!((job_current_cumulative_wait(&job, 25.0) - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn snapshot_feature_vector_includes_gang_and_cumulative_wait() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        cluster.clock = 10.0;
+        let mut job = Job::new("g1", "gang", 0.0, 100.0, 1);
+        job.gang_enabled = true;
+        job.enter_waiting(0.0);
+        cluster.enqueue_job(job);
+
+        let snap = ClusterSnapshot::from_cluster(&cluster, 1, &[true]);
+        let features = snap.to_feature_vector();
+        assert_eq!(features.len(), obs_size(1));
+        assert_eq!(features[5 + 5], 1.0);
+    }
+}

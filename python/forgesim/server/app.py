@@ -205,6 +205,8 @@ class CompareRequest(BaseModel):
 
 @app.post("/api/compare")
 async def compare_schedulers(body: CompareRequest) -> dict[str, Any]:
+    if len(set(body.configs)) != len(body.configs):
+        raise HTTPException(status_code=400, detail="configs must be distinct")
     results = []
     for config in body.configs:
         if not (CONFIG_DIR / config).exists():

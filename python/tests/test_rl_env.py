@@ -42,6 +42,7 @@ class TestForgeSimEnv(unittest.TestCase):
         env = ForgeSimEnv(str(RL_CONFIG))
         obs, info = env.reset(seed=0)
         self.assertEqual(obs.shape[0], env.obs_size)
+        self.assertEqual(env.obs_size, 5 + env.top_k * 7)
         self.assertIn("clock", info)
         total_reward = 0.0
         for _ in range(500):

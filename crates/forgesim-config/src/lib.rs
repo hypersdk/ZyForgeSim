@@ -481,6 +481,66 @@ mod tests {
     }
 
     #[test]
+    fn load_workload_rejects_invalid_gang_config() {
+        let dir = std::env::temp_dir().join("forgesim_test_invalid_gang");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("invalid_gang.yaml");
+        std::fs::write(
+            &path,
+            r#"jobs:
+  - id: bad-gang
+    arrival_time: 0
+    runtime: 10
+    gpu_count: 5
+    gang_enabled: true
+    gang_size_nodes: 2
+"#,
+        )
+        .unwrap();
+        assert!(load_workload(&path).is_err());
+    }
+
+    #[test]
+    fn topology_template_pcie_only_assigns_unique_groups() {
+        let cfg = ClusterConfig {
+            nodes: vec![NodeSpec {
+                id: "n0".into(),
+                gpus: vec![
+                    GpuSpec {
+                        id: "g0".into(),
+                        profile: "H100_80GB".into(),
+                        nvlink_group: None,
+                    },
+                    GpuSpec {
+                        id: "g1".into(),
+                        profile: "H100_80GB".into(),
+                        nvlink_group: None,
+                    },
+                ],
+            }],
+            tenant_quotas: HashMap::new(),
+            topology_template: "pcie_only".into(),
+        };
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "H100_80GB".into(),
+            HardwareProfile {
+                name: "H100_80GB".into(),
+                memory_gb: 80.0,
+                sm: None,
+                mig_profiles: vec![],
+                nvlink_bw_gbs: None,
+                pcie_bw_gbs: None,
+                mig: false,
+            },
+        );
+        let cluster = build_cluster(&cfg, &profiles).unwrap();
+        let g0 = cluster.gpu("g0").unwrap();
+        let g1 = cluster.gpu("g1").unwrap();
+        assert_ne!(g0.nvlink_group, g1.nvlink_group);
+    }
+
+    #[test]
     fn load_workload_with_mig_fields() {
         let workload =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/workloads/mig_m4.yaml");

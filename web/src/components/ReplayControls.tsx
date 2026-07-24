@@ -6,6 +6,18 @@ import { useReplayStore } from "@/store/useReplayStore";
 import { Button, Card } from "./ui";
 import clsx from "clsx";
 
+const DECISION_STYLES: Record<string, string> = {
+  job_scheduled: "decision-badge decision-badge-scheduled",
+  job_arrival: "decision-badge decision-badge-arrival",
+  job_complete: "decision-badge decision-badge-complete",
+  job_preempted: "decision-badge decision-badge-preempted",
+  gang_timeout: "decision-badge decision-badge-timeout",
+};
+
+function DecisionKindBadge({ kind }: { kind: string }) {
+  return <span className={DECISION_STYLES[kind] ?? "decision-badge"}>{kind.replace(/_/g, " ")}</span>;
+}
+
 export function ReplayControls({
   snapshots,
   decisions,
@@ -13,7 +25,7 @@ export function ReplayControls({
   snapshots: ClusterSnapshot[];
   decisions: SchedulerDecision[];
 }) {
-  const { index, playing, speed, setSnapshots, setDecisions, setIndex, setPlaying, setSpeed, next, prev } =
+  const { index, playing, speed, setSnapshots, setDecisions, setPlaying, setSpeed, next, prev } =
     useReplayStore();
 
   useEffect(() => {
@@ -36,18 +48,19 @@ export function ReplayControls({
 
   const decision = decisions[index] ?? decisions[decisions.length - 1];
   const snapshot = snapshots[index] ?? snapshots[snapshots.length - 1];
+  const totalSteps = Math.max(snapshots.length, decisions.length, 1);
 
   return (
-    <Card title="Scheduler Replay">
+    <Card title="Scheduler Replay" className="run-detail-span-2">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Button variant="secondary" onClick={() => setPlaying(!playing)}>
-          {playing ? "⏸ Pause" : "▶ Play"}
+          {playing ? "Pause" : "Play"}
         </Button>
         <Button variant="secondary" onClick={prev}>
-          ⏮ Prev
+          Prev
         </Button>
         <Button variant="secondary" onClick={next}>
-          ⏭ Next
+          Next
         </Button>
         {[0.5, 1, 2, 10].map((s) => (
           <button
@@ -60,27 +73,43 @@ export function ReplayControls({
             )}
             onClick={() => setSpeed(s)}
           >
-            {s}×
+            {s}x
           </button>
         ))}
         <span className="font-mono text-xs text-hs-muted">
-          step {index + 1} / {Math.max(snapshots.length, decisions.length, 1)}
+          step {index + 1} / {totalSteps}
         </span>
       </div>
       {decision ? (
-        <div className="rounded-hs border border-hs-border bg-hs-surface-code/60 p-3 text-sm">
-          <div className="font-mono text-xs text-hs-muted">
-            t={decision.time.toFixed(2)}s · {decision.kind}
-          </div>
-          <div className="mt-1 text-hs-heading">{decision.message}</div>
-          {decision.gpu_ids.length > 0 && (
-            <div className="mt-1 font-mono text-xs text-hs-muted">GPUs: {decision.gpu_ids.join(", ")}</div>
+        <div
+          className={clsx(
+            "decision-panel",
+            decision.kind === "job_preempted" && "decision-panel-preempted"
           )}
+        >
+          <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-hs-muted">
+            <span>t={decision.time.toFixed(2)}s</span>
+            <DecisionKindBadge kind={decision.kind} />
+          </div>
+          <div className="mt-2 text-hs-heading">{decision.message}</div>
+          {decision.job_name ? (
+            <div className="mt-1 text-sm text-hs-body">
+              Job: <span className="font-medium text-hs-heading">{decision.job_name}</span>
+            </div>
+          ) : null}
+          {decision.gpu_ids.length > 0 ? (
+            <div className="mt-1 font-mono text-xs text-hs-muted">GPUs: {decision.gpu_ids.join(", ")}</div>
+          ) : null}
         </div>
-      ) : null}
+      ) : (
+        <p className="text-sm text-hs-muted">No scheduler decisions recorded for this run.</p>
+      )}
       {snapshot ? (
-        <div className="mt-2 font-mono text-xs text-hs-muted">
-          clock={snapshot.clock.toFixed(2)} · running={snapshot.running} · queued={snapshot.waiting}
+        <div className="mt-3 flex flex-wrap gap-3 font-mono text-xs text-hs-muted">
+          <span>clock={snapshot.clock.toFixed(2)}</span>
+          <span>running={snapshot.running}</span>
+          <span>queued={snapshot.waiting}</span>
+          <span>free GPUs={snapshot.free_gpus}</span>
         </div>
       ) : null}
     </Card>

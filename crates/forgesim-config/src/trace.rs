@@ -6,7 +6,7 @@ use std::path::Path;
 
 use forgesim_core::cluster::Cluster;
 use forgesim_core::engine::{Scheduler, SimulationEngine};
-use forgesim_core::models::Job;
+use forgesim_core::models::{Job, JobState};
 use forgesim_metrics::SimulationMetrics;
 use forgesim_scheduler::{BestFitScheduler, FifoScheduler, ForgeScheduler, PriorityScheduler};
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,12 @@ pub struct TraceDiffReport {
     pub differing_placements: usize,
     pub diffs: Vec<PlacementDiff>,
     pub simulation_metrics: SimulationMetrics,
+    /// Job IDs that failed in simulation (e.g. gang timeout) with no successful schedule.
+    #[serde(default)]
+    pub simulated_failures: Vec<String>,
+    /// Oracle-scheduled jobs that never finished successfully in simulation.
+    #[serde(default)]
+    pub oracle_jobs_not_completed: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,9 +306,28 @@ pub fn compare_schedules(
     simulated: &HashMap<String, SimulatedPlacement>,
     scheduler: &str,
     metrics: SimulationMetrics,
+    finished_jobs: &[Job],
 ) -> TraceDiffReport {
     let mut diffs = Vec::new();
     let mut matching = 0usize;
+
+    let simulated_failures: Vec<String> = finished_jobs
+        .iter()
+        .filter(|j| j.state == JobState::Failed)
+        .map(|j| j.id.clone())
+        .collect();
+
+    let completed_ids: HashSet<_> = finished_jobs
+        .iter()
+        .filter(|j| j.state == JobState::Finished)
+        .map(|j| j.id.as_str())
+        .collect();
+
+    let oracle_jobs_not_completed: Vec<String> = oracle
+        .iter()
+        .map(|o| o.job_id.clone())
+        .filter(|id| !completed_ids.contains(id.as_str()))
+        .collect();
 
     for entry in oracle {
         let simulated_entry =
@@ -340,6 +365,8 @@ pub fn compare_schedules(
         differing_placements: oracle.len().saturating_sub(matching),
         diffs,
         simulation_metrics: metrics,
+        simulated_failures,
+        oracle_jobs_not_completed,
     }
 }
 
@@ -365,7 +392,13 @@ pub fn run_trace_replay(
     };
 
     let simulated = simulated_placements(&cluster);
-    let report = compare_schedules(&oracle, &simulated, scheduler, metrics);
+    let report = compare_schedules(
+        &oracle,
+        &simulated,
+        scheduler,
+        metrics,
+        &cluster.finished_jobs,
+    );
 
     Ok(TraceReplayResult { report })
 }
@@ -672,6 +705,52 @@ mod tests {
         let jobs = jobs_from_trace(&events).unwrap();
         assert_eq!(jobs.len(), 1);
         assert!(jobs[0].gang_enabled);
+    }
+
+    #[test]
+    fn rejects_gang_job_with_indivisible_gpu_count() {
+        let job = Job {
+            id: "g1".into(),
+            name: "g1".into(),
+            arrival_time: 0.0,
+            runtime: 10.0,
+            gpu_count: 5,
+            gang_enabled: true,
+            gang_size_nodes: Some(2),
+            ..Job::new("g1", "g1", 0.0, 10.0, 5)
+        };
+        assert!(validate_job_gang_config(&job).is_err());
+    }
+
+    #[test]
+    fn compare_schedules_reports_simulated_failures() {
+        let oracle = vec![OraclePlacement {
+            job_id: "j1".into(),
+            timestamp: 0.0,
+            node: "n0".into(),
+            gpu_ids: vec!["g0".into()],
+        }];
+        let simulated = HashMap::new();
+        let mut failed = Job::new("j1", "j1", 0.0, 10.0, 1);
+        failed.state = JobState::Failed;
+        let metrics = SimulationMetrics {
+            makespan: 5.0,
+            mean_wait_time: 0.0,
+            gpu_utilization: 0.0,
+            jobs_completed: 0,
+            jobs_total: 1,
+            queue_max_length: 0,
+            mean_cumulative_wait_time: 0.0,
+            jobs_unschedulable: 0,
+            mig_reconfigs: 0,
+            preemptions: 0,
+            topology_penalties: 0,
+            topology_runtime_inflation: 0.0,
+            jobs_failed: 1,
+        };
+        let report = compare_schedules(&oracle, &simulated, "fifo", metrics, &[failed]);
+        assert_eq!(report.simulated_failures, vec!["j1".to_string()]);
+        assert_eq!(report.oracle_jobs_not_completed, vec!["j1".to_string()]);
     }
 
     #[test]

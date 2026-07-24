@@ -207,4 +207,58 @@ mod tests {
         let m = SimulationMetrics::from_cluster(&cluster, 1);
         assert!((m.gpu_utilization - 100.0 / 120.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn reports_queue_max_length_and_unschedulable_jobs() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        cluster.queue_max_length = 3;
+        cluster.enqueue_job(Job::new("blocked", "blocked", 0.0, 10.0, 2));
+
+        let m = SimulationMetrics::from_cluster(&cluster, 2);
+        assert_eq!(m.queue_max_length, 3);
+        assert_eq!(m.jobs_unschedulable, 1);
+    }
+
+    #[test]
+    fn mean_wait_uses_cumulative_wait_not_last_start_minus_arrival() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.state = JobState::Finished;
+        job.cumulative_wait_secs = 12.0;
+        job.start_time = Some(50.0);
+        job.finish_time = Some(100.0);
+        job.gpu_seconds_consumed = 100.0;
+        cluster.finished_jobs.push(job);
+
+        let m = SimulationMetrics::from_cluster(&cluster, 1);
+        assert!((m.mean_cumulative_wait_time - 12.0).abs() < 1e-6);
+        assert!((m.mean_wait_time - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn counts_failed_jobs_separately_from_completed() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        let mut ok = Job::new("ok", "ok", 0.0, 10.0, 1);
+        ok.state = JobState::Finished;
+        ok.gpu_seconds_consumed = 10.0;
+        ok.finish_time = Some(10.0);
+        let mut failed = Job::new("bad", "bad", 0.0, 10.0, 1);
+        failed.state = JobState::Failed;
+        failed.finish_time = Some(5.0);
+        cluster.finished_jobs.push(ok);
+        cluster.finished_jobs.push(failed);
+
+        let m = SimulationMetrics::from_cluster(&cluster, 2);
+        assert_eq!(m.jobs_completed, 1);
+        assert_eq!(m.jobs_failed, 1);
+    }
 }
