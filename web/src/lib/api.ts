@@ -1,5 +1,6 @@
 import type {
   ClusterSnapshot,
+  CompareResult,
   ConfigEntry,
   JobsTimeline,
   RunDetail,
@@ -27,7 +28,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("unauthorized");
   }
   if (!res.ok) {
-    throw new Error(`request failed: ${path}`);
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body.detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail ?? `request failed: ${path} (${res.status})`);
   }
   return res.json() as Promise<T>;
 }
@@ -64,9 +72,7 @@ export async function fetchSnapshots(id: string): Promise<ClusterSnapshot[]> {
   return apiFetch<ClusterSnapshot[]>(`/runs/${id}/snapshots`);
 }
 
-export async function compareConfigs(configs: string[]): Promise<{
-  results: Array<{ config: string; status: string; metrics: SimulationMetrics | null; run_id: string }>;
-}> {
+export async function compareConfigs(configs: string[]): Promise<{ results: CompareResult[] }> {
   return apiFetch("/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -82,8 +88,9 @@ export function pollRun(id: string, onUpdate: (run: RunDetail) => void, interval
         const run = await fetchRun(id);
         onUpdate(run);
         if (run.status === "completed" || run.status === "failed") break;
-      } catch {
-        /* retry unless unauthorized redirect */
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "";
+        if (message === "unauthorized" || message.includes("(404)")) break;
       }
       await new Promise((r) => setTimeout(r, intervalMs));
     }

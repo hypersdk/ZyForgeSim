@@ -5,15 +5,20 @@ import { Card } from "./ui";
 
 export function MigView({ snapshot }: { snapshot: ClusterSnapshot | null }) {
   if (!snapshot) return null;
+
   return (
-    <Card title="MIG Layout (placeholder)">
+    <Card
+      title="MIG Layout"
+      description="Experimental preview — real MIG slice data is not yet wired into snapshots."
+      className="mig-view-experimental"
+    >
       <p className="mb-3 text-xs text-hs-muted">
-        Per-GPU MIG slice layout when MIG jobs are present. Whole-GPU jobs shown as single blocks.
+        Placeholder layout for future MIG visualization. Whole-GPU jobs are shown as a single occupied slot.
       </p>
       <div className="grid gap-2 md:grid-cols-2">
         {snapshot.nodes.flatMap((node) =>
           node.gpus.map((gpu) => (
-            <div key={gpu.id} className="rounded-hs border border-hs-border p-2 text-xs">
+            <div key={gpu.id} className="rounded-hs border border-hs-border p-2 text-xs opacity-80">
               <div className="font-medium text-hs-heading">{gpu.id}</div>
               <div className="mt-1 grid grid-cols-4 gap-1">
                 {[0, 1, 2, 3].map((slot) => (

@@ -1,16 +1,6 @@
 import type { SimulationMetrics } from "@/types/simulation";
 import { chartColors } from "@/lib/theme";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, MetricTile } from "./ui";
 
 function cumulativeWait(metrics: SimulationMetrics): number {
@@ -23,20 +13,17 @@ export function MetricsDashboard({ metrics }: { metrics: SimulationMetrics | nul
   const meanWait = cumulativeWait(metrics);
   const unschedulable = metrics.jobs_unschedulable ?? 0;
 
-  const bars = [
+  const percentBars = [
     { name: "GPU util", value: metrics.gpu_utilization * 100 },
     { name: "Jobs done", value: (metrics.jobs_completed / Math.max(metrics.jobs_total, 1)) * 100 },
+  ];
+
+  const countBars = [
     { name: "Preemptions", value: metrics.preemptions },
     { name: "Failed", value: metrics.jobs_failed },
     { name: "Topo penalties", value: metrics.topology_penalties },
-  ];
-
-  const series = [
-    { name: "makespan", value: metrics.makespan },
-    { name: "mean wait", value: meanWait },
-    { name: "queue max", value: metrics.queue_max_length },
-    { name: "unschedulable", value: unschedulable },
-    { name: "inflation", value: metrics.topology_runtime_inflation },
+    { name: "Queue max", value: metrics.queue_max_length },
+    { name: "Unschedulable", value: unschedulable },
   ];
 
   return (
@@ -53,36 +40,43 @@ export function MetricsDashboard({ metrics }: { metrics: SimulationMetrics | nul
       </div>
       <Card title="Metrics Charts">
         <div className="grid gap-4 md:grid-cols-2">
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={bars}>
-              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
-              <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
-              <YAxis tick={{ fill: chartColors.tick, fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0b0f14",
-                  border: "1px solid rgba(255,255,255,0.06)",
-                  borderRadius: "8px",
-                }}
-              />
-              <Bar dataKey="value" fill={chartColors.bar} />
-            </BarChart>
-          </ResponsiveContainer>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={series}>
-              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
-              <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
-              <YAxis tick={{ fill: chartColors.tick, fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0b0f14",
-                  border: "1px solid rgba(255,255,255,0.06)",
-                  borderRadius: "8px",
-                }}
-              />
-              <Line type="monotone" dataKey="value" stroke={chartColors.line} strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-hs-muted">Percent metrics</p>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={percentBars}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+                <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tick={{ fill: chartColors.tick, fontSize: 11 }} unit="%" />
+                <Tooltip
+                  formatter={(value: number) => [`${value.toFixed(1)}%`, "Value"]}
+                  contentStyle={{
+                    backgroundColor: "#0b0f14",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    borderRadius: "8px",
+                  }}
+                />
+                <Bar dataKey="value" fill={chartColors.bar} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-hs-muted">Count metrics</p>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={countBars}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+                <XAxis dataKey="name" tick={{ fill: chartColors.tick, fontSize: 11 }} />
+                <YAxis tick={{ fill: chartColors.tick, fontSize: 11 }} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#0b0f14",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    borderRadius: "8px",
+                  }}
+                />
+                <Bar dataKey="value" fill={chartColors.line} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </Card>
     </div>

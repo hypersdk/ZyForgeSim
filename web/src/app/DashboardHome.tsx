@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ComparePanel } from "@/components/ComparePanel";
 import { AppLink, Button, Card, EmptyState, FormField, PageHero, Select, StatusBadge } from "@/components/ui";
 import { compareConfigs, fetchConfigs, fetchRuns, startRun } from "@/lib/api";
-import type { ConfigEntry, RunSummary, SimulationMetrics } from "@/types/simulation";
+import type { CompareResult, ConfigEntry, RunSummary } from "@/types/simulation";
 
 export function DashboardHome() {
   const [configs, setConfigs] = useState<ConfigEntry[]>([]);
@@ -12,12 +12,12 @@ export function DashboardHome() {
   const [selected, setSelected] = useState("");
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
-  const [compareResults, setCompareResults] = useState<
-    Array<{ config: string; metrics: SimulationMetrics | null }>
-  >([]);
-  const [busy, setBusy] = useState(false);
+  const [compareResults, setCompareResults] = useState<CompareResult[]>([]);
+  const [runBusy, setRunBusy] = useState(false);
+  const [compareBusy, setCompareBusy] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
-  const sameCompareConfig = Boolean(compareA && compareB && compareA === compareB);
   const canCompare = Boolean(compareA && compareB && compareA !== compareB);
 
   const refresh = useCallback(async () => {
@@ -33,30 +33,32 @@ export function DashboardHome() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  useEffect(() => {
-    if (sameCompareConfig) setCompareResults([]);
-  }, [sameCompareConfig]);
-
   async function handleRun() {
-    if (!selected) return;
-    setBusy(true);
+    if (!selected || runBusy || compareBusy) return;
+    setRunBusy(true);
+    setRunError(null);
     try {
       const { id } = await startRun(selected);
       await refresh();
       window.location.href = `/runs/${id}`;
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "Failed to start simulation");
     } finally {
-      setBusy(false);
+      setRunBusy(false);
     }
   }
 
   async function handleCompare() {
-    if (!compareA || !compareB || compareA === compareB) return;
-    setBusy(true);
+    if (!canCompare || runBusy || compareBusy) return;
+    setCompareBusy(true);
+    setCompareError(null);
     try {
       const { results } = await compareConfigs([compareA, compareB]);
-      setCompareResults(results.map((r) => ({ config: r.config, metrics: r.metrics })));
+      setCompareResults(results);
+    } catch (e) {
+      setCompareError(e instanceof Error ? e.message : "Compare failed");
     } finally {
-      setBusy(false);
+      setCompareBusy(false);
     }
   }
 
@@ -76,7 +78,7 @@ export function DashboardHome() {
         >
           <div className="form-row">
             <FormField label="Configuration">
-              <Select value={selected} onChange={(e) => setSelected(e.target.value)}>
+              <Select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={runBusy || compareBusy}>
                 {configs.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.id}
@@ -84,10 +86,11 @@ export function DashboardHome() {
                 ))}
               </Select>
             </FormField>
-            <Button disabled={busy || !selected} onClick={handleRun}>
-              {busy ? "Starting…" : "Run simulation"}
+            <Button disabled={runBusy || compareBusy || !selected} onClick={handleRun}>
+              {runBusy ? "Starting…" : "Run simulation"}
             </Button>
           </div>
+          {runError ? <p className="inline-error-banner">{runError}</p> : null}
         </Card>
 
         <Card title="Recent Runs" description="Latest simulation jobs from this session.">
@@ -102,6 +105,7 @@ export function DashboardHome() {
                 <thead>
                   <tr>
                     <th>Config</th>
+                    <th>Run</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th />
@@ -111,6 +115,7 @@ export function DashboardHome() {
                   {runs.map((run) => (
                     <tr key={run.id}>
                       <td className="font-medium text-hs-heading">{run.config}</td>
+                      <td className="font-mono text-xs text-hs-muted">{run.id.slice(0, 8)}</td>
                       <td>
                         <StatusBadge status={run.status} />
                       </td>
@@ -129,7 +134,11 @@ export function DashboardHome() {
         <Card title="Compare Two Configs" description="Run both configs and compare scheduling metrics side by side.">
           <div className="form-row">
             <FormField label="Config A">
-              <Select value={compareA} onChange={(e) => setCompareA(e.target.value)}>
+              <Select
+                value={compareA}
+                onChange={(e) => setCompareA(e.target.value)}
+                disabled={compareBusy}
+              >
                 <option value="">Select config…</option>
                 {configs.map((c) => (
                   <option key={c.id} value={c.id} disabled={c.id === compareB}>
@@ -139,7 +148,11 @@ export function DashboardHome() {
               </Select>
             </FormField>
             <FormField label="Config B">
-              <Select value={compareB} onChange={(e) => setCompareB(e.target.value)}>
+              <Select
+                value={compareB}
+                onChange={(e) => setCompareB(e.target.value)}
+                disabled={compareBusy}
+              >
                 <option value="">Select config…</option>
                 {configs.map((c) => (
                   <option key={c.id} value={c.id} disabled={c.id === compareA}>
@@ -148,13 +161,17 @@ export function DashboardHome() {
                 ))}
               </Select>
             </FormField>
-            <Button variant="secondary" disabled={busy || !canCompare} onClick={handleCompare}>
-              Compare
+            <Button variant="secondary" disabled={compareBusy || runBusy || !canCompare} onClick={handleCompare}>
+              {compareBusy ? "Comparing…" : "Compare"}
             </Button>
           </div>
-          {sameCompareConfig ? (
-            <p className="compare-hint">Choose two different configs — comparing the same file won&apos;t show any difference.</p>
+          {configs.length < 2 ? (
+            <p className="compare-hint">Add at least two cluster configs to compare scheduling policies.</p>
           ) : null}
+          {compareBusy ? (
+            <p className="compare-progress">Running both simulations — this may take a minute for large configs.</p>
+          ) : null}
+          {compareError ? <p className="inline-error-banner">{compareError}</p> : null}
           <ComparePanel results={compareResults} />
         </Card>
       </div>
