@@ -1,5 +1,6 @@
 import type {
   ClusterSnapshot,
+  CompareResult,
   ConfigEntry,
   JobsTimeline,
   RunDetail,
@@ -27,7 +28,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("unauthorized");
   }
   if (!res.ok) {
-    throw new Error(`request failed: ${path}`);
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body.detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail ?? `request failed: ${path} (${res.status})`);
   }
   return res.json() as Promise<T>;
 }
@@ -64,13 +72,56 @@ export async function fetchSnapshots(id: string): Promise<ClusterSnapshot[]> {
   return apiFetch<ClusterSnapshot[]>(`/runs/${id}/snapshots`);
 }
 
-export async function compareConfigs(configs: string[]): Promise<{
-  results: Array<{ config: string; status: string; metrics: SimulationMetrics | null; run_id: string }>;
-}> {
+export async function compareConfigs(configs: string[]): Promise<{ results: CompareResult[] }> {
   return apiFetch("/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ configs }),
+  });
+}
+
+export async function fetchBenchmarkPresets(): Promise<{
+  configs: ConfigEntry[];
+  workload_presets: Array<{ id: string; description: string }>;
+}> {
+  return apiFetch("/benchmark/presets");
+}
+
+export async function fetchBenchmarkReports(): Promise<
+  Array<{
+    run_id: string;
+    config: string;
+    scheduler: string | null;
+    metrics: SimulationMetrics | null;
+    benchmark: import("@/types/simulation").SchedulerBenchmarkReport | null;
+  }>
+> {
+  return apiFetch("/benchmark/reports");
+}
+
+export async function runBenchmark(
+  config: string,
+  scheduler?: string,
+): Promise<{
+  run_id: string;
+  metrics: SimulationMetrics;
+  benchmark: import("@/types/simulation").SchedulerBenchmarkReport | null;
+}> {
+  return apiFetch("/benchmark/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config, scheduler }),
+  });
+}
+
+export async function runWhatIf(
+  baseConfig: string,
+  schedulers: string[],
+): Promise<{ results: Array<Record<string, unknown>> }> {
+  return apiFetch("/what-if", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_config: baseConfig, schedulers }),
   });
 }
 
@@ -82,8 +133,9 @@ export function pollRun(id: string, onUpdate: (run: RunDetail) => void, interval
         const run = await fetchRun(id);
         onUpdate(run);
         if (run.status === "completed" || run.status === "failed") break;
-      } catch {
-        /* retry unless unauthorized redirect */
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "";
+        if (message === "unauthorized" || message.includes("(404)")) break;
       }
       await new Promise((r) => setTimeout(r, intervalMs));
     }

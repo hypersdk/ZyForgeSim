@@ -34,16 +34,23 @@ export function PageHero({
   kicker,
   title,
   subtitle,
+  actions,
 }: {
   kicker?: string;
   title: string;
   subtitle?: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="page-hero">
-      {kicker ? <p className="page-hero-kicker">{kicker}</p> : null}
-      <h1 className="page-hero-title">{title}</h1>
-      {subtitle ? <p className="page-hero-subtitle">{subtitle}</p> : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          {kicker ? <p className="page-hero-kicker">{kicker}</p> : null}
+          <h1 className="page-hero-title">{title}</h1>
+          {subtitle ? <p className="page-hero-subtitle">{subtitle}</p> : null}
+        </div>
+        {actions ? <div className="flex gap-2">{actions}</div> : null}
+      </div>
     </div>
   );
 }
@@ -65,11 +72,20 @@ export function FormField({
   );
 }
 
-export function EmptyState({ title, text }: { title: string; text: string }) {
+export function EmptyState({
+  title,
+  text,
+  children,
+}: {
+  title: string;
+  text: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div className="empty-state">
       <p className="empty-state-title">{title}</p>
       <p className="empty-state-text">{text}</p>
+      {children}
     </div>
   );
 }
@@ -113,15 +129,17 @@ export function AppLink({
   href,
   className,
   children,
+  showArrow = true,
 }: {
   href: string;
   className?: string;
   children: React.ReactNode;
+  showArrow?: boolean;
 }) {
   return (
     <Link href={href} className={clsx("zyvor-link", className)}>
       {children}
-      <span aria-hidden="true">→</span>
+      {showArrow ? <span aria-hidden="true">→</span> : null}
     </Link>
   );
 }

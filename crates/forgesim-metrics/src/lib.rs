@@ -1,6 +1,10 @@
 use forgesim_core::cluster::Cluster;
 use forgesim_core::models::JobState;
+use forgesim_core::inference::percentile;
 use serde::{Deserialize, Serialize};
+
+pub mod benchmark;
+pub use benchmark::{CostModel, SchedulerBenchmarkReport};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobTimelineRecord {
@@ -77,7 +81,7 @@ fn job_to_timeline_record(job: &forgesim_core::models::Job) -> JobTimelineRecord
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SimulationMetrics {
     pub makespan: f64,
     pub mean_wait_time: f64,
@@ -99,6 +103,20 @@ pub struct SimulationMetrics {
     pub topology_runtime_inflation: f64,
     #[serde(default)]
     pub jobs_failed: usize,
+    #[serde(default)]
+    pub inference_jobs: usize,
+    #[serde(default)]
+    pub ttft_p50: f64,
+    #[serde(default)]
+    pub ttft_p99: f64,
+    #[serde(default)]
+    pub itl_p50: f64,
+    #[serde(default)]
+    pub tps_mean: f64,
+    #[serde(default)]
+    pub goodput: f64,
+    #[serde(default)]
+    pub queue_delay_p99: f64,
 }
 
 impl SimulationMetrics {
@@ -144,6 +162,50 @@ impl SimulationMetrics {
 
         let jobs_unschedulable = cluster.waiting_queue.len();
 
+        let inference_jobs: Vec<_> = finished_success
+            .iter()
+            .filter(|j| j.input_tokens.is_some() && j.output_tokens.is_some())
+            .collect();
+        let inference_count = inference_jobs.len();
+
+        let mut ttft_values: Vec<f64> = inference_jobs
+            .iter()
+            .filter_map(|j| j.ttft_secs)
+            .collect();
+        let ttft_p50 = percentile(&mut ttft_values.clone(), 0.50);
+        let ttft_p99 = percentile(&mut ttft_values, 0.99);
+
+        let mut itl_values: Vec<f64> = inference_jobs
+            .iter()
+            .filter_map(|j| j.itl_secs)
+            .collect();
+        let itl_p50 = percentile(&mut itl_values, 0.50);
+
+        let tps_mean = if inference_jobs.is_empty() {
+            0.0
+        } else {
+            inference_jobs
+                .iter()
+                .filter_map(|j| j.tps)
+                .sum::<f64>()
+                / inference_count as f64
+        };
+
+        let mut queue_delays: Vec<f64> = inference_jobs
+            .iter()
+            .filter_map(|j| {
+                j.start_time
+                    .map(|start| (start - j.arrival_time).max(0.0))
+            })
+            .collect();
+        let queue_delay_p99 = percentile(&mut queue_delays, 0.99);
+
+        let goodput = if inference_count == 0 {
+            0.0
+        } else {
+            inference_count as f64 / jobs_total.max(1) as f64
+        };
+
         Self {
             makespan,
             mean_wait_time,
@@ -158,6 +220,13 @@ impl SimulationMetrics {
             topology_penalties: cluster.topology_penalties,
             topology_runtime_inflation: cluster.topology_runtime_inflation,
             jobs_failed,
+            inference_jobs: inference_count,
+            ttft_p50,
+            ttft_p99,
+            itl_p50,
+            tps_mean,
+            goodput,
+            queue_delay_p99,
         }
     }
 
@@ -206,5 +275,59 @@ mod tests {
 
         let m = SimulationMetrics::from_cluster(&cluster, 1);
         assert!((m.gpu_utilization - 100.0 / 120.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reports_queue_max_length_and_unschedulable_jobs() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        cluster.queue_max_length = 3;
+        cluster.enqueue_job(Job::new("blocked", "blocked", 0.0, 10.0, 2));
+
+        let m = SimulationMetrics::from_cluster(&cluster, 2);
+        assert_eq!(m.queue_max_length, 3);
+        assert_eq!(m.jobs_unschedulable, 1);
+    }
+
+    #[test]
+    fn mean_wait_uses_cumulative_wait_not_last_start_minus_arrival() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.state = JobState::Finished;
+        job.cumulative_wait_secs = 12.0;
+        job.start_time = Some(50.0);
+        job.finish_time = Some(100.0);
+        job.gpu_seconds_consumed = 100.0;
+        cluster.finished_jobs.push(job);
+
+        let m = SimulationMetrics::from_cluster(&cluster, 1);
+        assert!((m.mean_cumulative_wait_time - 12.0).abs() < 1e-6);
+        assert!((m.mean_wait_time - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn counts_failed_jobs_separately_from_completed() {
+        let mut cluster = Cluster::new(vec![Node {
+            id: "n0".into(),
+            gpus: vec![Gpu::new("g0", "n0", "H100", 80.0)],
+        }]);
+        let mut ok = Job::new("ok", "ok", 0.0, 10.0, 1);
+        ok.state = JobState::Finished;
+        ok.gpu_seconds_consumed = 10.0;
+        ok.finish_time = Some(10.0);
+        let mut failed = Job::new("bad", "bad", 0.0, 10.0, 1);
+        failed.state = JobState::Failed;
+        failed.finish_time = Some(5.0);
+        cluster.finished_jobs.push(ok);
+        cluster.finished_jobs.push(failed);
+
+        let m = SimulationMetrics::from_cluster(&cluster, 2);
+        assert_eq!(m.jobs_completed, 1);
+        assert_eq!(m.jobs_failed, 1);
     }
 }

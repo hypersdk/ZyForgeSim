@@ -90,15 +90,18 @@ together — recommend separate PRs in the order below.
   - **Re-arrival / runtime accounting**: evicted jobs resume with
     *remaining* runtime, not a full restart — `Job::remaining_runtime`
     tracks seconds left, reduced by however long the last run segment
-    lasted (`Job::requeue_after_preemption`). Total GPU-seconds consumed
-    still equals the original `runtime` (segments sum to the original
-    duration), so `gpu_utilization` accounting needed no changes. Original
-    `arrival_time` is preserved (not reset to eviction time) — matches how
-    `wait_time()` already reads `start_time - arrival_time`, though note
-    this now *overstates* wait time for a preempted job since it also
-    counts the time it spent actually running before eviction; a more
-    precise "cumulative actual wait" metric was judged not worth the extra
-    state for this first cut.
+    lasted (`Job::requeue_after_preemption`). GPU utilization uses
+    `Job::gpu_seconds_consumed` (segment sum across preemptions), not
+    `(finish_time - start_time) * gpu_count`. Wait metrics use
+    `cumulative_wait_secs` (queue-only time); legacy `wait_time()` still
+    reports last-start minus arrival for backward compatibility.
+  - **Gang timeout re-arm**: after preemption, gang jobs get a fresh
+    `gang_deadline` and a new `GangTimeout` event; starting the job
+    invalidates pending timeouts via `gang_timeout_generation`.
+  - **Preemption decisions**: `job_preempted` entries in `decision_log`;
+    tenant-scoped eviction when `quota_aware_preemption` is enabled (default).
+  - **Restart penalty**: optional `SimulationEngine::preemption_restart_penalty_secs`
+    delays resumed jobs (default 0).
   - **Starvation prevention** (was Q4): a job that's already been
     preempted `MAX_PREEMPTIONS` (3) times becomes exempt from further
     eviction, via `Job::preemption_count`.

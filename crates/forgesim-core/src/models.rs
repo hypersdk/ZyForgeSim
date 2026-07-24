@@ -74,6 +74,24 @@ pub struct Job {
     /// Bumped when gang timeout is (re)scheduled or invalidated on start.
     #[serde(default, skip_serializing)]
     pub gang_timeout_generation: u32,
+    /// LLM model identifier for inference performance estimation.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
+    #[serde(default)]
+    pub batch_size: Option<u32>,
+    #[serde(default)]
+    pub concurrency: Option<u32>,
+    /// Simulated time-to-first-token in seconds (not queue wait).
+    #[serde(default, skip_serializing)]
+    pub ttft_secs: Option<f64>,
+    #[serde(default, skip_serializing)]
+    pub tps: Option<f64>,
+    #[serde(default, skip_serializing)]
+    pub itl_secs: Option<f64>,
 }
 
 impl Job {
@@ -114,6 +132,14 @@ impl Job {
             waiting_since: None,
             gang_deadline: None,
             gang_timeout_generation: 0,
+            model_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            batch_size: None,
+            concurrency: None,
+            ttft_secs: None,
+            tps: None,
+            itl_secs: None,
         }
     }
 
@@ -267,6 +293,43 @@ mod job_tests {
         job.start_time = Some(0.0);
         job.requeue_after_preemption(25.0);
         assert_eq!(job.gpu_seconds_consumed, 50.0);
+    }
+
+    #[test]
+    fn account_wait_until_accumulates_queue_time_only() {
+        let mut job = Job::new("j1", "a", 5.0, 100.0, 1);
+        job.enter_waiting(5.0);
+        job.account_wait_until(20.0);
+        assert_eq!(job.cumulative_wait_secs, 15.0);
+        assert_eq!(job.time_to_first_start, Some(20.0));
+
+        job.enter_waiting(50.0);
+        job.account_wait_until(80.0);
+        assert_eq!(job.cumulative_wait_secs, 45.0);
+    }
+
+    #[test]
+    fn requeue_after_preemption_sets_gang_deadline() {
+        let mut job = Job::new("g1", "gang", 0.0, 100.0, 1);
+        job.gang_enabled = true;
+        job.gang_size_nodes = Some(1);
+        job.gang_timeout_secs = Some(30.0);
+        job.start_time = Some(0.0);
+        job.requeue_after_preemption(10.0);
+
+        assert_eq!(job.gang_deadline, Some(40.0));
+        assert_eq!(job.gang_timeout_generation, 1);
+        assert_eq!(job.waiting_since, Some(10.0));
+    }
+
+    #[test]
+    fn cumulative_wait_time_excludes_running_segments() {
+        let mut job = Job::new("j1", "a", 0.0, 100.0, 1);
+        job.enter_waiting(0.0);
+        job.account_wait_until(10.0);
+        job.start_time = Some(10.0);
+        assert_eq!(job.cumulative_wait_time(), 10.0);
+        assert_eq!(job.wait_time(), 10.0);
     }
 }
 

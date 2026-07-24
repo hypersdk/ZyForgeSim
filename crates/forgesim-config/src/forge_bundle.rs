@@ -27,6 +27,26 @@ pub struct GpuTypeRegistry {
 pub struct ModelProfileEntry {
     pub runtime_seconds: f64,
     pub gpu_memory_gb: f64,
+    #[serde(default)]
+    pub prefill_ms_per_token: Option<f64>,
+    #[serde(default)]
+    pub decode_tps: Option<f64>,
+    #[serde(default)]
+    pub max_batch: Option<u32>,
+}
+
+impl ModelProfileEntry {
+    pub fn prefill_ms_per_token(&self) -> f64 {
+        self.prefill_ms_per_token.unwrap_or(0.08)
+    }
+
+    pub fn decode_tps(&self) -> f64 {
+        self.decode_tps.unwrap_or(120.0)
+    }
+
+    pub fn max_batch(&self) -> u32 {
+        self.max_batch.unwrap_or(32)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -521,6 +541,10 @@ pub fn run_forge_bundle_report(
         metrics,
         timeline: JobsTimeline::from_cluster(&cluster),
         decisions: cluster.decision_log.clone(),
+        snapshots: Vec::new(),
+        scheduler: scheduler.to_string(),
+        config_hash: String::new(),
+        benchmark: None,
     })
 }
 

@@ -7,6 +7,12 @@ profiles:
   H100:
     runtime_seconds: 1800
     gpu_memory_gb: 32
+    prefill_ms_per_token: 0.03
+    decode_tps: 280.0
+    max_batch: 64
   A100:
     runtime_seconds: 2400
     gpu_memory_gb: 32
+    prefill_ms_per_token: 0.05
+    decode_tps: 210.0
+    max_batch: 32

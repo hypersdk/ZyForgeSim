@@ -5,7 +5,9 @@ use forgesim_core::resource::ResourceManager;
 
 use crate::common::place_in_order;
 
-/// First-in-first-out scheduler: earliest arrival first, all-or-nothing GPU placement.
+/// First-in-first-out scheduler with **backfill**: jobs are sorted by arrival
+/// time, but jobs that fail `can_place` are skipped so later, smaller jobs may
+/// run first. This is not strict head-of-line blocking.
 #[derive(Debug, Default, Clone)]
 pub struct FifoScheduler;
 
