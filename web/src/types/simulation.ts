@@ -85,3 +85,10 @@ export interface ConfigEntry {
   id: string;
   path: string;
 }
+
+export interface CompareResult {
+  config: string;
+  status: string;
+  metrics: SimulationMetrics | null;
+  run_id: string;
+}

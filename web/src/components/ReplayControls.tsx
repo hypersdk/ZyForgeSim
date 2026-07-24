@@ -51,7 +51,11 @@ export function ReplayControls({
   const totalSteps = Math.max(snapshots.length, decisions.length, 1);
 
   return (
-    <Card title="Scheduler Replay" className="run-detail-span-2">
+    <Card
+      title="Scheduler Replay"
+      description="Cluster, topology, and MIG views follow the replay step below."
+      className="run-detail-span-2"
+    >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Button variant="secondary" onClick={() => setPlaying(!playing)}>
           {playing ? "Pause" : "Play"}
@@ -65,6 +69,8 @@ export function ReplayControls({
         {[0.5, 1, 2, 10].map((s) => (
           <button
             key={s}
+            type="button"
+            aria-pressed={speed === s}
             className={clsx(
               "rounded-hs px-2 py-1 text-xs transition",
               speed === s

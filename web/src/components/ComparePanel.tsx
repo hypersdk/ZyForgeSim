@@ -1,7 +1,7 @@
 "use client";
 
-import type { SimulationMetrics } from "@/types/simulation";
-import { MetricTile } from "./ui";
+import type { CompareResult, SimulationMetrics } from "@/types/simulation";
+import { AppLink, MetricTile, StatusBadge } from "./ui";
 
 function cumulativeWait(metrics: SimulationMetrics): number {
   return metrics.mean_cumulative_wait_time ?? metrics.mean_wait_time;
@@ -14,7 +14,11 @@ const COMPARE_FIELDS: Array<{
 }> = [
   { label: "Makespan", format: (m) => `${m.makespan.toFixed(1)}s`, lowerIsBetter: true },
   { label: "GPU Utilization", format: (m) => `${(m.gpu_utilization * 100).toFixed(1)}%`, lowerIsBetter: false },
-  { label: "Mean Wait", format: (m) => `${cumulativeWait(m).toFixed(2)}s`, lowerIsBetter: true },
+  {
+    label: "Mean Cumulative Wait",
+    format: (m) => `${cumulativeWait(m).toFixed(2)}s`,
+    lowerIsBetter: true,
+  },
   {
     label: "Jobs Completed",
     format: (m) => `${m.jobs_completed}/${m.jobs_total}`,
@@ -37,7 +41,7 @@ function metricValue(m: SimulationMetrics, label: string): number {
       return m.makespan;
     case "GPU Utilization":
       return m.gpu_utilization;
-    case "Mean Wait":
+    case "Mean Cumulative Wait":
       return cumulativeWait(m);
     case "Jobs Completed":
       return m.jobs_completed / Math.max(m.jobs_total, 1);
@@ -56,42 +60,69 @@ function metricValue(m: SimulationMetrics, label: string): number {
   }
 }
 
-export function ComparePanel({
-  results,
-}: {
-  results: Array<{ config: string; metrics: SimulationMetrics | null }>;
-}) {
+function formatDelta(fieldLabel: string, baseline: number, value: number, lowerIsBetter: boolean): string | null {
+  const tie = Math.abs(baseline - value) < 1e-6;
+  if (tie) return "Tie";
+  const better = lowerIsBetter ? value < baseline : value > baseline;
+  if (fieldLabel === "GPU Utilization" || fieldLabel === "Jobs Completed") {
+    const pct = Math.abs((value - baseline) * 100);
+    return better ? `Better (Δ ${pct.toFixed(1)}%)` : `Worse (Δ ${pct.toFixed(1)}%)`;
+  }
+  const delta = Math.abs(value - baseline);
+  const unit = fieldLabel === "Makespan" || fieldLabel === "Mean Cumulative Wait" ? "s" : "";
+  return better ? `Better (Δ ${delta.toFixed(delta < 10 ? 2 : 1)}${unit})` : `Worse (Δ ${delta.toFixed(delta < 10 ? 2 : 1)}${unit})`;
+}
+
+export function ComparePanel({ results }: { results: CompareResult[] }) {
   if (!results.length) return null;
 
   const baseline = results[0]?.metrics;
 
   return (
     <div className="compare-grid mt-4">
-      {results.map((r) => (
-        <div key={r.config} className="compare-result-card">
-          <div className="mb-3 text-sm font-semibold text-hs-heading">{r.config}</div>
+      {results.map((r, resultIndex) => (
+        <div key={`${r.config}-${r.run_id}`} className="compare-result-card">
+          <div className="compare-result-header">
+            <div>
+              <div className="text-sm font-semibold text-hs-heading">{r.config}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <StatusBadge status={r.status} />
+                <span className="font-mono text-xs text-hs-muted">{r.run_id.slice(0, 8)}</span>
+              </div>
+            </div>
+            {r.status === "completed" ? (
+              <AppLink href={`/runs/${r.run_id}`}>View run</AppLink>
+            ) : null}
+          </div>
           {r.metrics ? (
             <div className="compare-metrics-grid">
               {COMPARE_FIELDS.map((field) => {
                 const value = field.format(r.metrics!);
                 let highlight = "";
-                if (baseline && results.length === 2 && field.lowerIsBetter != null) {
+                let deltaText: string | null = null;
+                if (baseline && results.length === 2 && field.lowerIsBetter != null && resultIndex > 0) {
                   const a = metricValue(baseline, field.label);
                   const b = metricValue(r.metrics!, field.label);
                   const better = field.lowerIsBetter ? b < a : b > a;
                   const tie = Math.abs(a - b) < 1e-6;
+                  deltaText = formatDelta(field.label, a, b, field.lowerIsBetter);
                   if (!tie && better) highlight = "compare-metric-better";
-                  if (!tie && !better && r.config !== results[0].config) highlight = "compare-metric-worse";
+                  if (!tie && !better) highlight = "compare-metric-worse";
                 }
                 return (
                   <div key={field.label} className={highlight}>
                     <MetricTile label={field.label} value={value} />
+                    {deltaText ? <p className="compare-metric-delta">{deltaText}</p> : null}
                   </div>
                 );
               })}
             </div>
           ) : (
-            <p className="text-sm text-hs-muted">No metrics available for this run.</p>
+            <p className="text-sm text-hs-muted">
+              {r.status === "failed"
+                ? "Simulation failed — no metrics available for this config."
+                : "No metrics available for this run."}
+            </p>
           )}
         </div>
       ))}

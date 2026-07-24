@@ -65,11 +65,20 @@ export function FormField({
   );
 }
 
-export function EmptyState({ title, text }: { title: string; text: string }) {
+export function EmptyState({
+  title,
+  text,
+  children,
+}: {
+  title: string;
+  text: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div className="empty-state">
       <p className="empty-state-title">{title}</p>
       <p className="empty-state-text">{text}</p>
+      {children}
     </div>
   );
 }
@@ -113,15 +122,17 @@ export function AppLink({
   href,
   className,
   children,
+  showArrow = true,
 }: {
   href: string;
   className?: string;
   children: React.ReactNode;
+  showArrow?: boolean;
 }) {
   return (
     <Link href={href} className={clsx("zyvor-link", className)}>
       {children}
-      <span aria-hidden="true">→</span>
+      {showArrow ? <span aria-hidden="true">→</span> : null}
     </Link>
   );
 }

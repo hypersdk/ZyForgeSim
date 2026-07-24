@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { Button, Input } from "@/components/ui";
 import { DEFAULT_PASSWORD, DEFAULT_USERNAME } from "@/lib/auth";
+import { safeRelativePath } from "@/lib/navigation";
 
 function EyeIcon({ open }: { open: boolean }) {
   if (open) {
@@ -26,7 +27,7 @@ function EyeIcon({ open }: { open: boolean }) {
 
 export function LoginForm() {
   const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/";
+  const nextPath = safeRelativePath(searchParams.get("next"));
   const [username, setUsername] = useState(DEFAULT_USERNAME);
   const [password, setPassword] = useState(DEFAULT_PASSWORD);
   const [showPassword, setShowPassword] = useState(false);
@@ -49,7 +50,7 @@ export function LoginForm() {
         setError(data?.detail ?? `Login failed (${res.status})`);
         return;
       }
-      window.location.assign(nextPath.startsWith("/") ? nextPath : "/");
+      window.location.assign(nextPath);
     } catch {
       setError("Unable to reach the server");
     } finally {

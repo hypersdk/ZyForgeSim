@@ -12,6 +12,7 @@ interface ReplayState {
   setIndex: (i: number) => void;
   setPlaying: (p: boolean) => void;
   setSpeed: (s: number) => void;
+  reset: () => void;
   next: () => void;
   prev: () => void;
 }
@@ -22,7 +23,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   index: 0,
   playing: false,
   speed: 1,
-  setSnapshots: (snapshots) => set({ snapshots, index: 0 }),
+  setSnapshots: (snapshots) => set({ snapshots, index: 0, playing: false }),
   setDecisions: (decisions) => set({ decisions }),
   setIndex: (index) => {
     const max = Math.max(get().snapshots.length - 1, get().decisions.length - 1, 0);
@@ -30,6 +31,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   },
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
+  reset: () => set({ snapshots: [], decisions: [], index: 0, playing: false, speed: 1 }),
   next: () => get().setIndex(get().index + 1),
   prev: () => get().setIndex(get().index - 1),
 }));
