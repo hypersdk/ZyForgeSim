@@ -1,6 +1,6 @@
 # Forge Input Adapters
 
-ForgeSim stays independent from Zyvor Forge via an adapter layer. Adapters convert external representations into internal `Job` objects before simulation.
+ForgeSim stays independent from Zyvor Forge (https://zyvor.dev/forge) via an adapter layer. Adapters convert external representations into internal `Job` objects before simulation.
 
 ## Primary goal
 
