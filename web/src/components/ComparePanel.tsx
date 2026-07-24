@@ -33,6 +33,11 @@ const COMPARE_FIELDS: Array<{
     lowerIsBetter: true,
   },
   { label: "Topo Penalties", format: (m) => String(m.topology_penalties), lowerIsBetter: true },
+  { label: "TTFT p50", format: (m) => `${(m.ttft_p50 ?? 0).toFixed(3)}s`, lowerIsBetter: true },
+  { label: "TTFT p99", format: (m) => `${(m.ttft_p99 ?? 0).toFixed(3)}s`, lowerIsBetter: true },
+  { label: "TPS mean", format: (m) => (m.tps_mean ?? 0).toFixed(1), lowerIsBetter: false },
+  { label: "Goodput", format: (m) => `${((m.goodput ?? 0) * 100).toFixed(1)}%`, lowerIsBetter: false },
+  { label: "Queue delay p99", format: (m) => `${(m.queue_delay_p99 ?? 0).toFixed(3)}s`, lowerIsBetter: true },
 ];
 
 function metricValue(m: SimulationMetrics, label: string): number {
@@ -55,6 +60,16 @@ function metricValue(m: SimulationMetrics, label: string): number {
       return m.jobs_unschedulable ?? 0;
     case "Topo Penalties":
       return m.topology_penalties;
+    case "TTFT p50":
+      return m.ttft_p50 ?? 0;
+    case "TTFT p99":
+      return m.ttft_p99 ?? 0;
+    case "TPS mean":
+      return m.tps_mean ?? 0;
+    case "Goodput":
+      return m.goodput ?? 0;
+    case "Queue delay p99":
+      return m.queue_delay_p99 ?? 0;
     default:
       return 0;
   }

@@ -1,4 +1,4 @@
-use forgesim_config::{load_rl_session, run_simulation, run_simulation_report};
+use forgesim_config::{load_rl_session, run_simulation, run_simulation_report_with_scheduler};
 use forgesim_core::rl::RlSession;
 use forgesim_core::ClusterSnapshot;
 use forgesim_metrics::SimulationMetrics;
@@ -82,6 +82,7 @@ impl SimResult {
             topology_penalties: self.topology_penalties,
             topology_runtime_inflation: self.topology_runtime_inflation,
             jobs_failed: self.jobs_failed,
+            ..Default::default()
         };
         m.to_json_pretty()
     }
@@ -266,13 +267,31 @@ fn run_from_config(config_path: &str) -> PyResult<SimResult> {
 }
 
 #[pyfunction]
-fn run_report_from_config(py: Python<'_>, config_path: &str) -> PyResult<Py<PyAny>> {
-    let report = run_simulation_report(std::path::Path::new(config_path))
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+#[pyo3(signature = (config_path, scheduler=None))]
+fn run_report_from_config(
+    py: Python<'_>,
+    config_path: &str,
+    scheduler: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let report = run_simulation_report_with_scheduler(
+        std::path::Path::new(config_path),
+        scheduler,
+    )
+    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     let dict = PyDict::new_bound(py);
     dict.set_item("metrics", SimResult::from(report.metrics))?;
     dict.set_item("timeline", report.timeline.to_json_pretty())?;
     dict.set_item("decisions", decisions_to_py(py, &report.decisions)?)?;
+    let snapshots = PyList::empty_bound(py);
+    for snap in &report.snapshots {
+        snapshots.append(snapshot_to_py(py, snap)?)?;
+    }
+    dict.set_item("snapshots", snapshots)?;
+    dict.set_item("scheduler", &report.scheduler)?;
+    dict.set_item("config_hash", &report.config_hash)?;
+    if let Some(benchmark) = &report.benchmark {
+        dict.set_item("benchmark", benchmark.to_json_pretty())?;
+    }
     Ok(dict.into())
 }
 

@@ -80,6 +80,51 @@ export async function compareConfigs(configs: string[]): Promise<{ results: Comp
   });
 }
 
+export async function fetchBenchmarkPresets(): Promise<{
+  configs: ConfigEntry[];
+  workload_presets: Array<{ id: string; description: string }>;
+}> {
+  return apiFetch("/benchmark/presets");
+}
+
+export async function fetchBenchmarkReports(): Promise<
+  Array<{
+    run_id: string;
+    config: string;
+    scheduler: string | null;
+    metrics: SimulationMetrics | null;
+    benchmark: import("@/types/simulation").SchedulerBenchmarkReport | null;
+  }>
+> {
+  return apiFetch("/benchmark/reports");
+}
+
+export async function runBenchmark(
+  config: string,
+  scheduler?: string,
+): Promise<{
+  run_id: string;
+  metrics: SimulationMetrics;
+  benchmark: import("@/types/simulation").SchedulerBenchmarkReport | null;
+}> {
+  return apiFetch("/benchmark/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config, scheduler }),
+  });
+}
+
+export async function runWhatIf(
+  baseConfig: string,
+  schedulers: string[],
+): Promise<{ results: Array<Record<string, unknown>> }> {
+  return apiFetch("/what-if", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_config: baseConfig, schedulers }),
+  });
+}
+
 export function pollRun(id: string, onUpdate: (run: RunDetail) => void, intervalMs = 1000): () => void {
   let active = true;
   const tick = async () => {

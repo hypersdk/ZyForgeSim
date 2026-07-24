@@ -74,6 +74,24 @@ pub struct Job {
     /// Bumped when gang timeout is (re)scheduled or invalidated on start.
     #[serde(default, skip_serializing)]
     pub gang_timeout_generation: u32,
+    /// LLM model identifier for inference performance estimation.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
+    #[serde(default)]
+    pub batch_size: Option<u32>,
+    #[serde(default)]
+    pub concurrency: Option<u32>,
+    /// Simulated time-to-first-token in seconds (not queue wait).
+    #[serde(default, skip_serializing)]
+    pub ttft_secs: Option<f64>,
+    #[serde(default, skip_serializing)]
+    pub tps: Option<f64>,
+    #[serde(default, skip_serializing)]
+    pub itl_secs: Option<f64>,
 }
 
 impl Job {
@@ -114,6 +132,14 @@ impl Job {
             waiting_since: None,
             gang_deadline: None,
             gang_timeout_generation: 0,
+            model_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            batch_size: None,
+            concurrency: None,
+            ttft_secs: None,
+            tps: None,
+            itl_secs: None,
         }
     }
 

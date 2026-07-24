@@ -12,6 +12,27 @@ export interface SimulationMetrics {
   topology_penalties: number;
   topology_runtime_inflation: number;
   jobs_failed: number;
+  inference_jobs?: number;
+  ttft_p50?: number;
+  ttft_p99?: number;
+  itl_p50?: number;
+  tps_mean?: number;
+  goodput?: number;
+  queue_delay_p99?: number;
+}
+
+export interface SchedulerBenchmarkReport {
+  scheduler: string;
+  config_hash: string;
+  metrics: SimulationMetrics;
+  jain_fairness: number;
+  fragmentation: number;
+  cost_usd: number;
+  score_vector: Record<string, number>;
+}
+
+export function hasInferenceMetrics(metrics: SimulationMetrics | null | undefined): boolean {
+  return Boolean(metrics && (metrics.inference_jobs ?? 0) > 0);
 }
 
 export interface JobTimelineRecord {
@@ -79,6 +100,7 @@ export interface RunDetail extends RunSummary {
   metrics: SimulationMetrics | null;
   timeline: JobsTimeline | null;
   decision_count: number;
+  benchmark?: SchedulerBenchmarkReport | null;
 }
 
 export interface ConfigEntry {

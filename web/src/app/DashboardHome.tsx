@@ -68,6 +68,12 @@ export function DashboardHome() {
         kicker="GPU Scheduler Simulator"
         title="Dashboard"
         subtitle="Launch simulations, inspect cluster state, replay scheduler decisions, and compare scheduling policies side by side."
+        actions={
+          <>
+            <AppLink href="/benchmark">Benchmark</AppLink>
+            <AppLink href="/what-if">What-if</AppLink>
+          </>
+        }
       />
 
       <div className="dashboard-grid">

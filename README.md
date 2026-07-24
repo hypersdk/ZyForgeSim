@@ -158,16 +158,19 @@ crates/              Rust workspace (core, scheduler, config, metrics, cli, py)
 python/forgesim/     Python package + adapters, envs, viz, dashboard, server
 web/                 Next.js web dashboard
 scripts/             setup_dev.sh, run_live_dashboard.sh, run_web_*.sh
+benchmarks/          AIPerf adapters + CI fixtures (planned; see docs/benchmark_platform.md)
 configs/
   profiles/          Calibrated model runtimes (model + gpuType)
   hardware/          GPU capability profiles
 tests/fixtures/forge/  Golden Forge export bundle
-docs/                Architecture, milestones, UI dashboard guide
+docs/                Architecture, milestones, UI dashboard, benchmark platform roadmap
 ```
 
 ## Milestones
 
 See [docs/milestones.md](docs/milestones.md). **M1–M8 complete**, including topology runtime inflation, gang timeout, RL (M7), and visualization (M8).
+
+**Benchmark platform (planned):** [docs/benchmark_platform.md](docs/benchmark_platform.md) — three-layer extension (Simulation → Benchmark → Analytics) connecting scheduler policies to LLM serving metrics (TTFT, TPS, goodput) with AIPerf calibration. Phases P0–P10 include UI, unit tests, and integration tests per feature.
 
 Schedulers: `fifo`, `priority`, `preemptive`, `forge` (alias for preemptive), `bestfit`.
 
