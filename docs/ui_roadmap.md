@@ -27,6 +27,7 @@ Rich CLI dashboard    FastAPI (REST + WebSocket)
 | `./scripts/run_web_dashboard.sh` | Web API + UI together |
 | `./scripts/run_web_api.sh` | FastAPI only (:8080) |
 | `./scripts/run_web_ui.sh` | Next.js only (:3000) |
+| `./scripts/stop_web_dashboard.sh` | Stop API + UI |
 
 ## Phase 1 — Rich CLI dashboard (done)
 
@@ -38,7 +39,8 @@ Rich CLI dashboard    FastAPI (REST + WebSocket)
 
 - **Backend:** `python/forgesim/server/app.py` — `./scripts/run_web_api.sh`
 - **Frontend:** `web/` — `./scripts/run_web_ui.sh` or `./scripts/run_web_dashboard.sh`
-- **Views:** cluster summary, replay, Gantt, topology, metrics, compare
+- **Views:** home (run + compare), login
+- **Gap:** dedicated `/runs/:id` replay page not shipped (components exist; home may still link there)
 
 ## Phase 3 — Zyvor Forge integration (future)
 
@@ -50,13 +52,13 @@ Rich CLI dashboard    FastAPI (REST + WebSocket)
 
 Long-term vision: **Grafana meets Kubernetes Dashboard meets DCGM — focused on AI scheduling**.
 
-## Phase 4 — Benchmark dashboard (planned)
+## Phase 4 — Benchmark dashboard (MVP done)
 
 Extends Phase 2 web UI — not a separate app. See [benchmark_platform.md](benchmark_platform.md).
 
-| Route (planned) | Purpose |
-|-----------------|---------|
-| `/benchmark` | TTFT, TPS, goodput, sim vs measured (AIPerf) |
-| `/what-if` | Cluster/scheduler sweep matrix |
+| Route | Purpose | Status |
+|-------|---------|--------|
+| `/benchmark` | TTFT, TPS, goodput, benchmark runs | Done (MVP) |
+| `/what-if` | Cluster/scheduler sweep matrix | Done (table; Pareto TBD) |
 
-Backend: inference metrics from P1, AIPerf import from P7, compare/score from P4.
+Backend: inference metrics (P1), AIPerf adapter (P7), score reports (P4). Remaining polish: full sim-vs-measured AIPerf overlay, twin library page, working `/runs/:id`.

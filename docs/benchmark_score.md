@@ -1,6 +1,6 @@
 # Scheduler Benchmark Score (P4)
 
-This document defines the ForgeSim scheduler benchmark report and optional composite score. Implementation is planned for **P4** of the [benchmark platform roadmap](benchmark_platform.md).
+This document defines the ForgeSim scheduler benchmark report and optional composite score. **MVP implemented** in `crates/forgesim-metrics` (`SchedulerBenchmarkReport`). See the [benchmark platform roadmap](benchmark_platform.md).
 
 ## Purpose
 
@@ -8,7 +8,7 @@ Compare scheduling policies on both **cluster efficiency** (utilization, fragmen
 
 ## Metric vector
 
-Each run produces a `SchedulerBenchmarkReport` with the following fields:
+Each run can produce a `SchedulerBenchmarkReport` with fields including:
 
 | Category | Metric | Definition |
 |----------|--------|------------|
@@ -21,17 +21,21 @@ Each run produces a `SchedulerBenchmarkReport` with the following fields:
 | Serving | `ttft_p50`, `ttft_p99` | Time to first token percentiles (ms) — **not** `time_to_first_start` |
 | Serving | `itl_p50` | Inter-token latency percentile (ms) |
 | Serving | `tps_mean` | Mean decode tokens/sec |
-| Serving | `goodput` | Fraction of requests meeting SLA (configurable TTFT/latency ceiling) |
-| Fairness | `jain_index` | Jain fairness index across tenants |
+| Serving | `goodput` | **MVP:** `inference_jobs / jobs_total` (share of jobs that are inference). SLA-fraction goodput is **not** implemented yet |
+| Fairness | `jain_fairness` | Jain fairness index across tenants |
 | Efficiency | `fragmentation` | Idle GPU-time / total GPU-time |
 | Cost | `gpu_hour_cost` | `gpu_seconds × rate` from `configs/analytics/cost.yaml` |
 
+Golden fixture: `tests/fixtures/benchmark/score_vector.json`.
+
 ## Composite score (optional)
 
-A single scalar is **optional** and must use **published weights** in config:
+`SchedulerBenchmarkReport::composite_score(weights)` accepts a weight map. A checked-in `configs/analytics/score_weights.yaml` is **not** shipped yet — callers pass weights in code/API.
+
+Illustrative weights (planned config shape):
 
 ```yaml
-# configs/analytics/score_weights.yaml (planned)
+# configs/analytics/score_weights.yaml (not yet in tree)
 weights:
   ttft_p99: 0.25
   goodput: 0.25
@@ -46,11 +50,18 @@ direction:
   cost: lower_is_better
 ```
 
-Default UI behavior (P4/P5): show the **full metric vector** and Pareto-style compare highlighting. Composite score is opt-in with tooltip showing weights.
+Default UI behavior: show the **full metric vector**. Composite score is opt-in.
 
-## SLA / goodput
+## Cost model
 
-Goodput requires an SLA config per workload or tenant:
+```yaml
+# configs/analytics/cost.yaml
+gpu_hour_usd: 3.50
+```
+
+## SLA / goodput (future)
+
+SLA-based goodput would require per-workload ceilings, for example:
 
 ```yaml
 sla:
@@ -58,9 +69,10 @@ sla:
   e2e_latency_p99_ms: 5000
 ```
 
-A request counts toward goodput if simulated TTFT and end-to-end latency are both under the SLA at the concurrency observed when the job ran.
+Until that lands, treat `goodput` as the inference-job fraction documented above — do not interpret it as SLO attainment.
 
 ## Related docs
 
 - [Benchmark platform roadmap](benchmark_platform.md)
 - [M6 scheduler features](design/m6_scheduler_features.md)
+- [Manual test guide](manual_test_benchmark_platform.md)

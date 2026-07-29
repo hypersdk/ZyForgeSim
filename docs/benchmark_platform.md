@@ -2,9 +2,9 @@
 
 ForgeSim extends from **GPU scheduler simulation** (M1–M8) into a platform that connects **scheduling decisions** to **end-to-end LLM serving metrics** — TTFT, inter-token latency (ITL), tokens/sec, goodput, queue delay, GPU utilization, and cost.
 
-This document is the canonical roadmap for the Benchmark and Analytics layers. It incorporates a multi-model architecture review (Composer 2.5 Fast + Grok 4.5 High Fast) and maps ten proposed features to phased delivery with UI, unit tests, and integration tests per phase.
+**Status: MVP shipped** for phases P0–P10 (core paths exist in-tree). This document remains the canonical roadmap; each phase section below notes what landed vs what is still open. QA steps: [manual_test_benchmark_platform.md](manual_test_benchmark_platform.md).
 
-See also: [Architecture](architecture.md) · [Milestones](milestones.md) · [UI dashboard](ui_dashboard.md) · [Manual test guide](manual_test_benchmark_platform.md)
+See also: [Architecture](architecture.md) · [Milestones](milestones.md) · [UI dashboard](ui_dashboard.md) · [Score vector](benchmark_score.md) · [OpenAI shim](openai_shim.md)
 
 ---
 
@@ -78,9 +78,9 @@ flowchart TB
 
 | Layer | Responsibility | Current state |
 |-------|----------------|---------------|
-| **Simulation** | DES, schedulers, cluster, MIG, topology, RL | M1–M8 complete |
-| **Benchmark** | Workload/trace I/O, AIPerf calibration, OpenAI virtual endpoint | Greenfield (`benchmarks/` placeholder) |
-| **Analytics** | Dashboard, reports, digital twin, what-if, CI regression | Scheduling UI exists; inference KPIs missing |
+| **Simulation** | DES, schedulers, cluster, MIG, topology, RL, inference model | M1–M8 + P1 complete |
+| **Benchmark** | Workload/trace I/O, AIPerf calibration, OpenAI virtual endpoint | MVP in `python/forgesim/benchmarks/`, `serving_trace.rs`, OpenAI shim |
+| **Analytics** | Dashboard, reports, digital twin, what-if, CI regression | `/benchmark`, `/what-if`, score reports, twin API, `benchmark.yml` — UI polish gaps remain |
 
 ### Integration boundaries
 
@@ -108,11 +108,22 @@ flowchart TB
 | 7 | Digital twin | P9 | Persistent calibration store + drift detection |
 | 10 | CI/CD performance testing | P10 | Golden sim fixtures; live AIPerf optional nightly |
 
-**P0 (prerequisite):** Harden simulation + web replay before new layers.
+**P0 (prerequisite):** Harden simulation + web replay before new layers — **done**.
 
 **Do not start with Feature 1 (AIPerf alone)** without P1 — reviewers flagged this as mislabeled scheduling metrics.
 
-**First demo milestone:** P1 + P7 + P5 — simulated TTFT/TPS from calibrated profiles, AIPerf import, **Simulated vs Measured** dashboard.
+**First demo milestone (P1 + P7 + P5):** simulated TTFT/TPS from calibrated profiles, AIPerf import, benchmark dashboard — **MVP available**. Full sim-vs-measured overlay and AIPerf upload UI remain thin (use the Python adapter CLI).
+
+### Remaining gaps (post-MVP)
+
+| Gap | Notes |
+|-----|-------|
+| CLI `--serving-trace` / `--export-serving-trace` | Use Rust lib, Python adapter, or `GET /api/runs/{id}/serving-trace` |
+| Run detail page `/runs/:id` | Linked from home; page not shipped — use API artifacts |
+| SLA-based goodput / `score_weights.yaml` | Score vector exists; goodput is inference-job fraction today |
+| Cluster templates + Pareto what-if | Sweep API + `/what-if` table exist |
+| Twin library UI | TwinStore + `GET /api/twins` only |
+| OpenAI shim → DES queue | Analytical profile timing only ([openai_shim.md](openai_shim.md)) |
 
 ---
 
@@ -133,7 +144,7 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ## Phase details
 
-### P0 — Simulation hardening (~2 weeks)
+### P0 — Simulation hardening — **MVP done**
 
 **Goal:** Trust existing analytics before adding LLM metrics.
 
@@ -146,7 +157,7 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ---
 
-### P1 — Inference performance model (~4–6 weeks) ⭐
+### P1 — Inference performance model — **MVP done** ⭐
 
 **Goal:** Estimate runtime and serving KPIs from model + tokens + GPU type.
 
@@ -161,7 +172,7 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ---
 
-### P2 — Synthetic LLM workload generator (~3 weeks)
+### P2 — Synthetic LLM workload generator — **MVP done**
 
 | Area | Deliverables |
 |------|--------------|
@@ -172,19 +183,20 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ---
 
-### P3 — Serving trace import/export (~3 weeks)
+### P3 — Serving trace import/export — **partial**
 
 | Area | Deliverables |
 |------|--------------|
-| **Rust** | `crates/forgesim-config/src/serving_trace.rs`; CLI `--serving-trace` / `--export-serving-trace` |
-| **Python** | `python/forgesim/adapters/serving_trace.py` — AIPerf trace mapping |
+| **Rust** | `crates/forgesim-config/src/serving_trace.rs` (**done**); CLI `--serving-trace` / `--export-serving-trace` (**not yet**) |
+| **Python** | `python/forgesim/adapters/serving_trace.py` — AIPerf trace mapping (**done**) |
 | **Schema** | `serving.trace.v1` JSONL: `{time, model, input_tokens, output_tokens}` |
-| **UI** | Run detail export button |
+| **API** | `GET /api/runs/{id}/serving-trace` (**done**; token fields may be stubbed) |
+| **UI** | Run detail export button (**blocked on missing `/runs/:id` page**) |
 | **Integration** | Round-trip fixture `tests/fixtures/traces/serving_llama.jsonl` |
 
 ---
 
-### P4 — Scheduler benchmark score (~2 weeks)
+### P4 — Scheduler benchmark score — **MVP done**
 
 | Area | Deliverables |
 |------|--------------|
@@ -196,7 +208,7 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ---
 
-### P5 — Benchmark dashboard UI (~3 weeks)
+### P5 — Benchmark dashboard UI — **MVP done**
 
 | Area | Deliverables |
 |------|--------------|
@@ -206,25 +218,25 @@ New inference metrics (P1): `ttft_p50`, `ttft_p99`, `itl_p50`, `tps_mean`, `good
 
 ---
 
-### P6 — OpenAI-compatible endpoint (~3 weeks)
+### P6 — OpenAI-compatible endpoint — **MVP done**
 
 | Area | Deliverables |
 |------|--------------|
-| **Work** | `python/forgesim/server/openai_shim.py` — `POST /v1/chat/completions` → virtual queue → SSE stream |
-| **Security** | API key auth, rate limits, localhost bind by default |
+| **Work** | `python/forgesim/server/openai_shim.py` — `POST /v1/chat/completions` + SSE (**done**; analytical timing, not DES queue) |
+| **Security** | API key auth + rate limits (**done**); bind host depends on run script |
 | **Docs** | [openai_shim.md](openai_shim.md) |
 | **Integration** | OpenAI client against shim; deterministic TTFT for fixed seed |
 
 ---
 
-### P7 — AIPerf calibration plugin (~4 weeks) ⭐
+### P7 — AIPerf calibration plugin — **MVP done** ⭐
 
 | Area | Deliverables |
 |------|--------------|
 | **Work** | `python/forgesim/benchmarks/aiperf_adapter.py` — export sim workload; import AIPerf JSON → profiles |
-| **CLI** | `python -m forgesim.benchmarks.aiperf import results.json --profile llama-70b-h100` |
+| **CLI** | `PYTHONPATH=python python -m forgesim.benchmarks.aiperf_adapter import results.json --profile llama-70b` |
 | **Fixtures** | `tests/fixtures/aiperf/` — offline golden artifacts (no GPU in CI) |
-| **UI** | Import upload; **Simulated vs Measured** chart |
+| **UI** | Import upload / full sim-vs-measured chart — **thin**; use CLI for now |
 | **Integration** | Re-run sim after import → TTFT within tolerance of measured |
 
 **Workflow:**
@@ -235,23 +247,23 @@ ForgeSim sim → Export benchmark config/trace → AIPerf → vLLM/NIM → Metri
 
 ---
 
-### P8 — What-if analysis (~3 weeks)
+### P8 — What-if analysis — **partial**
 
 | Area | Deliverables |
 |------|--------------|
-| **Work** | `python/forgesim/benchmarks/sweep.py`; cluster templates in `configs/clusters/templates/` |
-| **API** | `POST /api/what-if` — sweep cluster × scheduler × workload |
-| **UI** | `web/src/app/what-if/page.tsx` — scenario matrix, Pareto chart (TTFT vs util) |
+| **Work** | `python/forgesim/benchmarks/sweep.py` (**done**); cluster templates in `configs/clusters/templates/` (**not yet**) |
+| **API** | `POST /api/what-if` — sweep cluster × scheduler × workload (**done**) |
+| **UI** | `web/src/app/what-if/page.tsx` — scenario matrix (**done**); Pareto chart (**not yet**) |
 
 ---
 
-### P9 — Digital twin (~6 weeks)
+### P9 — Digital twin — **partial**
 
 | Area | Deliverables |
 |------|--------------|
-| **Store** | `outputs/twins/` or SQLite: `{gpu_type, model, ttft, tps, throughput, measured_at, aiperf_run_id}` |
-| **Pipeline** | AIPerf import → twin entry → profile auto-update; drift detection |
-| **UI** | Twin library page; run detail calibration badge |
+| **Store** | SQLite twin store + `GET /api/twins` (**done**) |
+| **Pipeline** | AIPerf import → twin entry → profile auto-update; drift detection (**partial**) |
+| **UI** | Twin library page; run detail calibration badge (**not yet**) |
 
 Example twin entry:
 
@@ -267,7 +279,7 @@ H100:
 
 ---
 
-### P10 — CI/CD performance testing (~3 weeks)
+### P10 — CI/CD performance testing — **MVP done**
 
 | Area | Deliverables |
 |------|--------------|
@@ -282,7 +294,7 @@ H100:
 | Schema | Purpose | Location |
 |--------|---------|----------|
 | `scheduler.trace.v1` | M3 oracle replay — placement decisions | `crates/forgesim-config/src/trace.rs` |
-| `serving.trace.v1` | LLM request arrivals for AIPerf replay | P3 — new |
+| `serving.trace.v1` | LLM request arrivals for AIPerf replay | P3 — `serving_trace.rs` |
 | `JobsTimeline` | Post-run Gantt export | M8 — `forgesim-metrics` |
 
 ---
@@ -332,7 +344,7 @@ Run existing tests: see [milestones.md](milestones.md#running-tests).
 
 ---
 
-## Key files (planned)
+## Key files (implemented unless noted)
 
 | Phase | Paths |
 |-------|-------|
@@ -356,4 +368,4 @@ Run existing tests: see [milestones.md](milestones.md#running-tests).
 P0 → P1 → (P2 ∥ P3) → P4 → P5 → P6 → P7 → P8 → P9 → P10
 ```
 
-P2 and P3 can run in parallel after P1. P10 can start after P4 golden fixtures exist, but full CI gates land last.
+MVP paths through this order are in `main`. Follow-up work focuses on the [remaining gaps](#remaining-gaps-post-mvp) table above (CLI serving-trace flags, `/runs/:id`, SLA goodput, Pareto/templates, twin UI, DES-backed OpenAI shim).

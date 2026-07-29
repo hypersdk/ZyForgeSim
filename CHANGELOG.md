@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Milestones M5–M8
+- **M5 — Topology**: NVLink-domain placement, `topology_penalties`,
+  runtime inflation via `TopologyGraph` when jobs span domains.
+- **M6 — Scheduler features**: tenant GPU quotas, `PriorityScheduler`,
+  `PreemptivePriorityScheduler`, gang node spread + timeout,
+  `ForgeScheduler` / `BestFitScheduler` (`fifo` | `priority` |
+  `preemptive` | `forge` | `bestfit`).
+- **M7 — RL**: `RlSession` / `SimSession`, Gymnasium `ForgeSimEnv`,
+  PPO baseline (`python/baselines/ppo_cleanrl.py`).
+- **M8 — Visualization**: `--jobs-output` timeline JSON, Gantt/heatmap
+  via `forgesim.viz`.
+
+#### UI
+- Rich live terminal dashboard (`python/forgesim/dashboard/`,
+  `./scripts/run_live_dashboard.sh`).
+- FastAPI run registry + Next.js web dashboard (`web/`) with login,
+  compare, `/benchmark`, and `/what-if` routes.
+- Dev scripts: `setup_dev.sh`, `run_web_*.sh`, `stop_web_dashboard.sh`,
+  `clean.sh`, `fix_pyexpat.sh`.
+
+#### Benchmark platform (P0–P10 MVP)
+- Inference performance model (`inference.rs`) and profile v2 fields
+  (`prefill_ms_per_token`, `decode_tps`, `max_batch`).
+- Synthetic LLM workloads (`generate_synthetic.py`) and
+  `serving.trace.v1` import/export (Rust + Python adapter; API export).
+- `SchedulerBenchmarkReport` + cost model (`configs/analytics/cost.yaml`).
+- OpenAI-compatible shim at `POST /v1/chat/completions` (API key + rate
+  limit; analytical timing).
+- AIPerf calibration adapter (`python -m forgesim.benchmarks.aiperf_adapter`).
+- Twin store API (`GET /api/twins`) and what-if / benchmark REST endpoints.
+- CI workflow `.github/workflows/benchmark.yml` +
+  `benchmarks/ci/run_golden.sh`.
+
+#### Deploy
+- Dockerfiles and `./deploy/build-images.sh`.
+- Kubernetes manifests under `deploy/kubernetes/` (API + web + ingress).
+
 ### Fixed
 - `forge-sim run --output` / `replay --output` no longer fail with "No such
   file or directory" when the target directory does not already exist.
@@ -25,7 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `---` and never unwrapped `List`. Found by exporting and replaying a
   real Forge deployment. `yaml_documents()` now unwraps `kind: List`.
 
-### Added
+### Added (earlier Unreleased slices)
 - CI workflows for Rust (`fmt`, `clippy`, unit + integration tests) and
   Python (`maturin build` + `unittest`).
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `rust-toolchain.toml`.
@@ -44,8 +83,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - M6 (preemption slice): new `PreemptivePriorityScheduler`
   (`scheduler.type: preemptive` / `--scheduler preemptive`) — a waiting
   job may evict lower-priority running jobs to fit. Evicted jobs resume
-  later with their remaining runtime (no restart penalty), and become
-  exempt from further preemption after 3 evictions. New
+  later with their remaining runtime (no restart penalty by default), and
+  become exempt from further preemption after 3 evictions. New
   `SimulationMetrics.preemptions` field, printed by the CLI as
   `preemptions:` when nonzero. See `docs/forge_input.md` and
   `docs/design/m6_scheduler_features.md`.

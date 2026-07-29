@@ -51,14 +51,9 @@ well-connected GPUs, and does that matter for runtime?*
 
 ## Suggested first slice
 
-Domain-level grouping (question 2) + hard-constraint-with-fallback
-(question 3): extend `ResourceManager::can_place_whole_gpu` to prefer
-same-`nvlink_group` placement for jobs with `gang_enabled` or
-`network_bw_gbps` set, falling back to today's scatter behavior with a
-`topology_penalty` counter in metrics. Keeps the change scoped to
-`resource.rs` + `metrics` without inventing a full graph type yet, and
-gives a concrete signal to decide if per-GPU adjacency (vs. domain-level)
-is actually needed.
+~~Domain-level grouping + hard-constraint-with-fallback…~~ **Done** — see
+“What exists today” and [milestones.md](../milestones.md) M5 criteria.
+Future work is under **Future refinements** above.
 
 ## Non-goals for M5
 

@@ -143,14 +143,32 @@ preempt running jobs with strictly lower priority (lowest priority evicted
 first), stopping as soon as enough capacity is freed — or leaving the
 cluster untouched if evicting every eligible candidate still isn't enough.
 
-Evicted jobs resume later with whatever runtime they had left — no restart
-penalty, as if perfectly checkpointed — and re-enter the queue at their
-*original* priority and arrival time. A job that's been preempted 3 times
-becomes exempt from further eviction, so a persistently low-priority job
-still eventually finishes rather than being evicted forever. Only
-whole-GPU jobs trigger eviction; a MIG job that doesn't fit is left
-waiting. `SimulationMetrics.preemptions` counts how many evictions
-happened (`forge-sim run` prints a `preemptions:` line when nonzero).
+Evicted jobs resume later with whatever runtime they had left — by default
+with no restart penalty, as if perfectly checkpointed — and re-enter the
+queue at their *original* priority and arrival time. (Optional
+`preemption_restart_penalty_secs` on the engine can delay resume when
+non-zero.) A job that's been preempted 3 times becomes exempt from further
+eviction, so a persistently low-priority job still eventually finishes
+rather than being evicted forever. Only whole-GPU jobs trigger eviction; a
+MIG job that doesn't fit is left waiting. `SimulationMetrics.preemptions`
+counts how many evictions happened (`forge-sim run` prints a
+`preemptions:` line when nonzero).
+
+## Other schedulers (M6)
+
+| Flag / `scheduler.type` | Behavior |
+|-------------------------|----------|
+| `fifo` | Arrival order |
+| `priority` | Highest priority first; no preemption |
+| `preemptive` | Priority + eviction of lower-priority runners |
+| `forge` | Alias for preemptive priority (Forge-like default) |
+| `bestfit` | Tightest-node GPU packing among feasible placements |
+
+```bash
+cargo run -p forgesim-cli -- run \
+  --forge-bundle tests/fixtures/forge \
+  --scheduler bestfit
+```
 
 ## Gang scheduling (M6)
 
@@ -172,13 +190,33 @@ cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
 Runtime and memory are **not** in Forge CRDs. They come from [`configs/profiles/`](../configs/profiles/):
 
 ```yaml
-# configs/profiles/gpt-13b.yaml
+# configs/profiles/gpt-13b.yaml  (v1 — training-style scalar runtime)
 model: gpt-13b
 profiles:
   H100:
     runtime_seconds: 604800
     gpu_memory_gb: 80
 ```
+
+### Profile v2 (inference)
+
+Inference jobs can use analytical TTFT/TPS fields (P1). Example
+[`configs/profiles/llama-70b.yaml`](../configs/profiles/llama-70b.yaml):
+
+```yaml
+model: llama-70b
+profiles:
+  H100:
+    runtime_seconds: 3480
+    gpu_memory_gb: 80
+    prefill_ms_per_token: 0.12
+    decode_tps: 95.0
+    max_batch: 32
+```
+
+Internal YAML jobs may set `model_id`, `input_tokens`, `output_tokens`,
+`batch_size`, and related fields; see `configs/workloads/inference_llama.yaml`
+and `configs/clusters/inference_llama.yaml`.
 
 Missing profiles cause an explicit error (no silent default runtime).
 

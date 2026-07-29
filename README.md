@@ -4,8 +4,9 @@ ForgeSim is a discrete-event simulator for Kubernetes-native GPU scheduling insp
 
 ## Architecture
 
-- **Rust core** — event engine, cluster model, schedulers, metrics, Forge bundle loader
-- **Python API** — thin PyO3 bindings + Forge CRD adapters, Gymnasium env, visualization
+- **Rust core** — event engine, cluster model, schedulers, metrics, Forge bundle loader, inference timing model
+- **Python API** — PyO3 bindings, Forge CRD adapters, Gymnasium env, visualization, FastAPI server, AIPerf adapters
+- **Web UI** — Next.js dashboard (runs, benchmark, what-if) + Rich CLI live dashboard
 
 ## Quick start
 
@@ -90,6 +91,16 @@ cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
 cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
 ```
 
+### Inference + LLM serving metrics (P1)
+
+```bash
+cargo run -p forgesim-cli -- run \
+  --config configs/clusters/inference_llama.yaml \
+  --output outputs/inference_metrics.json
+```
+
+Uses profile v2 fields (`prefill_ms_per_token`, `decode_tps`) to estimate TTFT/TPS. See [docs/benchmark_platform.md](docs/benchmark_platform.md).
+
 ### Visualization (M8)
 
 ```bash
@@ -110,7 +121,7 @@ Rich terminal dashboard — see **[docs/ui_dashboard.md](docs/ui_dashboard.md)**
 ./scripts/run_live_dashboard.sh --config configs/clusters/small_h100.yaml
 ```
 
-### Web dashboard (Phase 2 UI)
+### Web dashboard (Phase 2 + benchmark UI)
 
 FastAPI + Next.js — see **[docs/ui_dashboard.md](docs/ui_dashboard.md)** for API reference and scripts.
 
@@ -120,7 +131,16 @@ cd web && npm install && cd ..
 ./scripts/run_web_dashboard.sh    # http://localhost:3000
 ```
 
-Or run API and UI separately: `./scripts/run_web_api.sh` · `./scripts/run_web_ui.sh`
+Routes: `/` (runs + compare), `/benchmark`, `/what-if`, `/login`. Or run API and UI separately: `./scripts/run_web_api.sh` · `./scripts/run_web_ui.sh`
+
+### Deploy (Docker / Kubernetes)
+
+```bash
+./deploy/build-images.sh
+kubectl apply -k deploy/kubernetes
+```
+
+See **[docs/deploy.md](docs/deploy.md)** and **[deploy/kubernetes/README.md](deploy/kubernetes/README.md)**.
 
 ### Python + RL (M7)
 
@@ -134,6 +154,26 @@ python python/examples/run_rl_env.py
 python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
 ```
 
+### AIPerf calibration (P7)
+
+```bash
+PYTHONPATH=python python -m forgesim.benchmarks.aiperf_adapter \
+  import tests/fixtures/aiperf/sample_result.json --profile llama-70b
+```
+
+### OpenAI-compatible shim (P6)
+
+With the web API running (`./scripts/run_web_api.sh`):
+
+```bash
+curl -s http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer dev-forgesim-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"llama-70b","messages":[{"role":"user","content":"hi"}],"stream":false}'
+```
+
+See [docs/openai_shim.md](docs/openai_shim.md).
+
 ### Test layout
 
 | Layer | Location | What it covers |
@@ -143,34 +183,38 @@ python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
 | CLI integration | `crates/forgesim-cli/tests/cli_integration.rs` | `forge-sim run` / `replay` binary |
 | Python unit | `python/tests/test_unit_adapters.py` | CRD mapping, profiles, bundle, trace adapters |
 | Python integration | `python/tests/test_integration_cli.py` | CLI via `cargo run -p forgesim-cli` |
+| Benchmark / UI | `python/tests/test_*benchmark*`, `test_server_*`, `test_openai_*` | API, shim, AIPerf, score |
 
 ```bash
 cargo test --workspace --exclude forgesim-py
 cargo test -p forgesim-config --test integration
 cargo test -p forgesim-cli --test cli_integration
 PYTHONPATH=python python3 -m unittest discover -s python/tests -v
+bash benchmarks/ci/run_golden.sh
 ```
 
 ## Project layout
 
 ```
 crates/              Rust workspace (core, scheduler, config, metrics, cli, py)
-python/forgesim/     Python package + adapters, envs, viz, dashboard, server
-web/                 Next.js web dashboard
-scripts/             setup_dev.sh, run_live_dashboard.sh, run_web_*.sh
-benchmarks/          AIPerf adapters + CI fixtures (planned; see docs/benchmark_platform.md)
+python/forgesim/     Adapters, envs, viz, dashboard, server, benchmarks, workloads
+web/                 Next.js web dashboard (/ , /benchmark, /what-if)
+scripts/             setup_dev.sh, run_*_dashboard.sh, clean.sh
+deploy/              Docker images + Kubernetes manifests
+benchmarks/ci/       Golden sim regression script
 configs/
-  profiles/          Calibrated model runtimes (model + gpuType)
-  hardware/          GPU capability profiles
-tests/fixtures/forge/  Golden Forge export bundle
-docs/                Architecture, milestones, UI dashboard, benchmark platform roadmap
+  profiles/          Calibrated model runtimes (v1 + inference v2)
+  clusters/          Cluster + workload YAML examples
+  analytics/         Cost model (score weights optional)
+tests/fixtures/      Forge, traces, AIPerf, benchmark goldens
+docs/                Architecture, milestones, UI, benchmark platform, deploy
 ```
 
 ## Milestones
 
 See [docs/milestones.md](docs/milestones.md). **M1–M8 complete**, including topology runtime inflation, gang timeout, RL (M7), and visualization (M8).
 
-**Benchmark platform (planned):** [docs/benchmark_platform.md](docs/benchmark_platform.md) — three-layer extension (Simulation → Benchmark → Analytics) connecting scheduler policies to LLM serving metrics (TTFT, TPS, goodput) with AIPerf calibration. Phases P0–P10 include UI, unit tests, and integration tests per feature.
+**Benchmark platform (MVP shipped):** [docs/benchmark_platform.md](docs/benchmark_platform.md) — inference model, serving traces, score vector, `/benchmark` + `/what-if` UI, OpenAI shim, AIPerf adapter, twin store API, CI golden script. Remaining gaps (full sim-vs-measured UI, CLI `--serving-trace`, twin library page) are listed in that doc and the [manual test guide](docs/manual_test_benchmark_platform.md).
 
 Schedulers: `fifo`, `priority`, `preemptive`, `forge` (alias for preemptive), `bestfit`.
 

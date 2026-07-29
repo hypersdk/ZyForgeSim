@@ -1,7 +1,10 @@
 # ForgeSim Benchmark Platform — Manual Test Document
 
-**Version:** P0–P10 (benchmark platform plan)  
-**Audience:** QA / developers validating simulation, benchmark, and analytics layers
+**Version:** P0–P10 MVP (implemented in `main`)  
+**Audience:** QA / developers validating simulation, benchmark, and analytics layers  
+**Status:** Use this as the QA guide for the shipped MVP. Remaining product gaps are listed in §15.
+
+See also: [benchmark_platform.md](benchmark_platform.md) · [ui_dashboard.md](ui_dashboard.md) · [openai_shim.md](openai_shim.md)
 
 ---
 
@@ -559,7 +562,7 @@ PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 
 **File:** `.github/workflows/benchmark.yml`
 
-**Verify on PR/push to `main` or `init_dev`:**
+**Verify on PR/push to `main`:**
 
 - Job `rust-benchmark`: Rust tests + `run_golden.sh`
 - Job `python-benchmark`: Python unit tests
@@ -583,13 +586,15 @@ End-to-end “Simulated vs calibrated” demo (plan milestone: P1 + P7 + P5):
 
 | Plan item | Status |
 |-----------|--------|
-| Run detail UI `/runs/:id` | Linked from dashboard; verify page exists in your branch |
-| CLI `--serving-trace` flags | Not in `forge-sim` CLI — use Rust lib / Python adapter |
-| OpenAI shim → live DES queue | Analytical timing only |
+| Run detail UI `/runs/:id` | **Missing page** — home may link here; use `outputs/runs/{id}/` artifacts |
+| CLI `--serving-trace` flags | Not in `forge-sim` CLI — use Rust lib / Python adapter / API export |
+| Serving-trace API tokens | Export may stub `input_tokens` / `output_tokens` (e.g. 128/64) |
+| OpenAI shim → live DES queue | Analytical timing only ([openai_shim.md](openai_shim.md)) |
 | Benchmark AIPerf upload UI | Use Python `aiperf_adapter` CLI |
 | Twin library page | API + SQLite only |
 | Compare PDF export | Not implemented |
 | P8 Pareto chart / CSV | Table view only |
+| CI Python job + maturin | Extension-dependent tests may skip if the wheel is not built in that job |
 
 ---
 

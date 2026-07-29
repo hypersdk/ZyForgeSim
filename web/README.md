@@ -1,6 +1,6 @@
 # ForgeSim Web Dashboard
 
-Next.js frontend for monitoring ForgeSim simulations.
+Next.js frontend for monitoring ForgeSim simulations and benchmark scenarios.
 
 **Full documentation:** [../docs/ui_dashboard.md](../docs/ui_dashboard.md)
 
@@ -15,6 +15,16 @@ cd web && npm install && cd ..
 ```
 
 Open http://localhost:3000
+
+## Routes
+
+| Path | Purpose |
+|------|---------|
+| `/` | Run simulations, recent runs, compare |
+| `/login` | Dashboard auth |
+| `/benchmark` | Scheduler benchmark hub (TTFT/TPS/score) |
+| `/what-if` | Cluster × scheduler sweeps |
+| `/runs/:id` | **Not shipped** — home may link here; use API artifacts under `outputs/runs/{id}/` |
 
 ## Scripts
 
@@ -32,6 +42,7 @@ Custom ports: `API_PORT=9000 UI_PORT=3001 ./scripts/run_web_dashboard.sh`
 - Next.js 14, React, TypeScript, Tailwind CSS
 - Recharts (metrics), React Flow (topology), Zustand (replay state)
 - Proxies `/api` and `/ws` to FastAPI on port 8080
+- OpenAI-compatible shim is served by the API at `/v1` (see [docs/openai_shim.md](../docs/openai_shim.md))
 
 ## Brand / theming
 
@@ -67,6 +78,10 @@ FORGESIM_DASHBOARD_USER=Admin FORGESIM_DASHBOARD_PASSWORD='your-secret' ./script
 ```
 
 Sessions use an httpOnly cookie (7-day expiry). Unauthenticated users are redirected to `/login`.
+
+## Deploy
+
+Container/Kubernetes install: [../deploy/kubernetes/README.md](../deploy/kubernetes/README.md).
 
 ## Development
 

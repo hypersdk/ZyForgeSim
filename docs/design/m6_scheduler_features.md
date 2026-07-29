@@ -141,10 +141,10 @@ together — recommend separate PRs in the order below.
 
 - Cross-cluster or hierarchical quotas (namespace + team + cluster-wide) —
   `FabricQuota` today is flat per-team; match that.
-- Preemption cost modeling (checkpoint/restart overhead delaying a
-  preempted job's eventual resume) — the current model assumes free,
-  instant checkpointing (resumed jobs pick up exactly where they left
-  off). Modeling real restart overhead is a possible follow-up, not
-  implemented.
-- Quota-driven preemption (evicting to satisfy a tenant's own quota) —
-  only priority-driven eviction is implemented.
+- Realistic checkpoint/restart cost modeling — an optional
+  `preemption_restart_penalty_secs` delay exists (default **0**), but there
+  is no checkpoint size, I/O, or warm-start model. Non-zero penalty is a
+  simple resume delay only.
+- Quota-*driven* preemption (evicting solely to free a tenant's own quota
+  budget) — eviction remains priority-driven; `quota_aware_preemption`
+  only scopes which victims are eligible under tenant limits.

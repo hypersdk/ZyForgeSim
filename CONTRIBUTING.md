@@ -2,15 +2,34 @@
 
 ## Setup
 
-```bash
-# Rust workspace
-cargo build --workspace --exclude forgesim-py
+Preferred (handles macOS Homebrew `pyexpat` quirks and builds the PyO3 extension):
 
-# Python bindings
-python3 -m venv .venv && source .venv/bin/activate
-pip install "maturin>=1.7,<2.0" pyyaml
-maturin build --release
-pip install target/wheels/forgesim-*.whl
+```bash
+./scripts/setup_dev.sh
+source .venv/bin/activate
+```
+
+If `pyexpat` still fails: `USE_UV=1 ./scripts/setup_dev.sh`.
+
+Optional extras:
+
+```bash
+pip install -e '.[viz]'        # Gantt / heatmaps
+pip install -e '.[rl]'         # Gymnasium env + PPO baseline
+pip install -e '.[server]'     # FastAPI / uvicorn (web API)
+pip install -e '.[dashboard]'  # Rich CLI dashboard
+```
+
+Web UI:
+
+```bash
+cd web && npm install && cd ..
+```
+
+Manual Rust-only build (no Python extension):
+
+```bash
+cargo build --workspace --exclude forgesim-py
 ```
 
 ## Before opening a PR
@@ -21,20 +40,31 @@ cargo clippy --workspace --exclude forgesim-py -- -D warnings
 cargo test --workspace --exclude forgesim-py
 cargo test -p forgesim-config --test integration
 cargo test -p forgesim-cli --test cli_integration
-python3 -m unittest discover -s python/tests -v
+PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 ```
 
-CI (`.github/workflows/rust.yml`, `python.yml`) runs the same checks on every push and PR to `main`.
+When touching benchmark or CI fixtures:
+
+```bash
+bash benchmarks/ci/run_golden.sh
+```
+
+When changing the web UI, run `cd web && npm run build` locally if practical.
+
+CI (`.github/workflows/rust.yml`, `python.yml`, `benchmark.yml`) runs checks on every push and PR to `main`.
 
 ## Project layout
 
-See [docs/architecture.md](docs/architecture.md) for the crate layout and simulation loop, and [docs/forge_input.md](docs/forge_input.md) for how Forge CRDs map to internal models.
+See [docs/architecture.md](docs/architecture.md) for the crate layout and simulation loop, [docs/forge_input.md](docs/forge_input.md) for Forge CRD mapping, [docs/ui_dashboard.md](docs/ui_dashboard.md) for dashboards, and [docs/benchmark_platform.md](docs/benchmark_platform.md) for the benchmark MVP.
+
+Kubernetes deploy notes live in [deploy/kubernetes/README.md](deploy/kubernetes/README.md).
 
 ## Style
 
 - Rust: standard `rustfmt` formatting, no `clippy` warnings.
-- Prefer small, focused PRs tied to one milestone or fix — see [docs/milestones.md](docs/milestones.md) for current scope.
+- Prefer small, focused PRs tied to one milestone, phase, or fix — see [docs/milestones.md](docs/milestones.md).
 - New Forge field mappings must be documented in `docs/forge_input.md`'s field mapping table.
+- New HTTP APIs should be listed in `docs/ui_dashboard.md`.
 
 ## Reporting issues
 

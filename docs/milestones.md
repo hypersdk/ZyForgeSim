@@ -51,10 +51,17 @@ cargo run -p forgesim-cli -- run --config configs/clusters/topology_penalty.yaml
 cargo run -p forgesim-cli -- run --config configs/clusters/gang_m6.yaml
 cargo run -p forgesim-cli -- run --config configs/clusters/gang_timeout_m6.yaml
 
+# Inference metrics (P1)
+cargo run -p forgesim-cli -- run --config configs/clusters/inference_llama.yaml
+
 # Timeline export + viz (M8)
 cargo run -p forgesim-cli -- run \
   --config configs/clusters/small_h100.yaml \
   --jobs-output outputs/jobs.json
+
+# Web / benchmark UI
+./scripts/setup_dev.sh && cd web && npm install && cd ..
+./scripts/run_web_dashboard.sh   # /, /benchmark, /what-if
 ```
 
 ## Running tests
@@ -69,6 +76,9 @@ cargo test -p forgesim-cli --test cli_integration
 
 # Python unit + integration tests
 PYTHONPATH=python python3 -m unittest discover -s python/tests -v
+
+# Benchmark golden (CI)
+bash benchmarks/ci/run_golden.sh
 ```
 
 ### MIG simulation (M4)
@@ -116,7 +126,8 @@ cargo run -p forgesim-cli -- run --config configs/clusters/mig_single.yaml
 ### RL (M7)
 
 ```bash
-maturin develop
+./scripts/setup_dev.sh
+source .venv/bin/activate
 pip install -e '.[rl]'
 python python/examples/run_rl_env.py
 python python/baselines/ppo_cleanrl.py --config configs/clusters/rl_small.yaml
@@ -146,18 +157,18 @@ Extends ForgeSim from GPU scheduler simulation into a platform connecting **sche
 
 | Phase | Status | Deliverable |
 |-------|--------|-------------|
-| **P0** | Planned | Scheduler override, replay fidelity, run metadata |
-| **P1** | Planned | Inference performance model — gate for TTFT/TPS |
-| **P2** | Planned | Synthetic LLM workload generator |
-| **P3** | Planned | `serving.trace.v1` import/export (separate from M3) |
-| **P4** | Planned | Scheduler benchmark score + cost model |
-| **P5** | Planned | Benchmark dashboard UI (`web/src/app/benchmark/`) |
-| **P6** | Planned | OpenAI-compatible virtual endpoint |
-| **P7** | Planned | AIPerf calibration import/export |
-| **P8** | Planned | What-if cluster/scheduler sweeps |
-| **P9** | Planned | Digital twin store + drift detection |
-| **P10** | Planned | CI performance regression gates |
+| **P0** | MVP done | Scheduler override on API runs, snapshots, run metadata / config hash |
+| **P1** | MVP done | Inference performance model — TTFT/TPS from profile v2 |
+| **P2** | MVP done | Synthetic LLM workload generator + golden fixture |
+| **P3** | Partial | `serving.trace.v1` Rust/Python I/O + API export; **no CLI `--serving-trace` yet** |
+| **P4** | MVP done | `SchedulerBenchmarkReport` + cost model; optional composite score |
+| **P5** | MVP done | `/benchmark` page + benchmark APIs (sim-vs-measured overlay still thin) |
+| **P6** | MVP done | OpenAI-compatible shim (auth, rate limit, analytical timing) |
+| **P7** | MVP done | AIPerf adapter import/export + fixtures |
+| **P8** | Partial | `/what-if` + sweep API; no cluster templates / Pareto chart yet |
+| **P9** | Partial | TwinStore SQLite + `GET /api/twins`; no twin library UI |
+| **P10** | MVP done | `benchmark.yml` + `benchmarks/ci/run_golden.sh` |
 
-**Full roadmap:** [docs/benchmark_platform.md](benchmark_platform.md)
+**Full roadmap + remaining gaps:** [docs/benchmark_platform.md](benchmark_platform.md)
 
-**First demo target:** P1 + P7 + P5 — simulated vs measured TTFT/TPS on the dashboard.
+**QA guide:** [docs/manual_test_benchmark_platform.md](manual_test_benchmark_platform.md)

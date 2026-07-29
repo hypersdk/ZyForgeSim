@@ -2,20 +2,20 @@
 
 ## Overview
 
-ForgeSim is a discrete-event GPU cluster scheduler simulator inspired by Zyvor Forge. It separates a high-performance **Rust simulation core** from a thin **Python research API**.
+ForgeSim is a discrete-event GPU cluster scheduler simulator inspired by Zyvor Forge. It separates a high-performance **Rust simulation core** from a thin **Python research API**, with optional FastAPI + Next.js dashboards and a benchmark/analytics layer for LLM serving metrics.
 
 ## Layers
 
 ```
-Python (Gymnasium, notebooks, viz)
+Python (Gymnasium, notebooks, viz, FastAPI, AIPerf adapters)
         │
    PyO3 / maturin
         │
 Rust workspace
-  ├── forgesim-core      Event engine, cluster, resources, RL session
-  ├── forgesim-scheduler Scheduling policies
-  ├── forgesim-config    YAML / Forge bundle / trace loaders
-  ├── forgesim-metrics   Makespan, wait, utilization, timeline export
+  ├── forgesim-core      Event engine, cluster, resources, RL, inference model
+  ├── forgesim-scheduler Scheduling policies (fifo, priority, preemptive, forge, bestfit)
+  ├── forgesim-config    YAML / Forge bundle / scheduler + serving trace loaders
+  ├── forgesim-metrics   Makespan, wait, utilization, timeline, benchmark score
   ├── forgesim-cli       forge-sim binary
   └── forgesim-py        Python bindings (SimResult, SimSession)
 ```
@@ -35,7 +35,7 @@ Rust workspace
    carries the `Job::run_generation` it completes, so a stale event from a
    run that was preempted before finishing is ignored rather than
    corrupting the job's later, actual completion
-5. Clock advances only to the next event (no polling)
+6. Clock advances only to the next event (no polling)
 
 ## RL session (M7)
 
@@ -51,7 +51,7 @@ reward. Exposed to Python as `SimSession` and wrapped by `ForgeSimEnv`.
 The CLI writes timeline via `--jobs-output`; Python `forgesim.viz` renders
 Gantt charts and GPU utilization heatmaps.
 
-## UI stack (staged)
+## UI stack
 
 The Rust core never knows about the UI — it exposes APIs and events only.
 
@@ -65,36 +65,41 @@ Python Bindings (PyO3: SimSession, SimResult, run_report_from_config)
 Rich CLI   FastAPI + WebSockets
 dashboard      │
            Next.js dashboard
+           (/ , /benchmark, /what-if)
 ```
 
-| Phase | Deliverable | Location |
-|-------|-------------|----------|
-| 1 | Rich live terminal dashboard | `python/forgesim/dashboard/` |
-| 2 | FastAPI run registry + replay API | `python/forgesim/server/` |
-| 2 | Next.js monitor (Gantt, topology, compare) | `web/` |
+| Phase | Deliverable | Location | Status |
+|-------|-------------|----------|--------|
+| 1 | Rich live terminal dashboard | `python/forgesim/dashboard/` | Done |
+| 2 | FastAPI run registry + replay API | `python/forgesim/server/` | Done |
+| 2 | Next.js monitor (home, compare, login) | `web/` | Done (MVP) |
+| 4 | Benchmark + what-if pages | `web/src/app/benchmark`, `what-if` | Done (MVP) |
 
-See [docs/ui_roadmap.md](ui_roadmap.md) for the full roadmap including Zyvor Forge integration.
+See [docs/ui_roadmap.md](ui_roadmap.md). **User guide:** [docs/ui_dashboard.md](ui_dashboard.md).
 
-**User guide:** [docs/ui_dashboard.md](ui_dashboard.md) — setup scripts, CLI dashboard, web dashboard, API reference, troubleshooting.
+**Note:** Home links to `/runs/:id`, but a dedicated run-detail page is not shipped yet; use API artifacts under `outputs/runs/{uuid}/` for Gantt/replay data.
 
-## Benchmark platform (planned)
+## Benchmark platform (MVP)
 
-ForgeSim is extending from scheduler simulation (M1–M8) into a three-layer **benchmark platform** that connects scheduling decisions to LLM serving metrics (TTFT, TPS, goodput), calibrated via AIPerf.
+ForgeSim connects scheduling decisions to LLM serving metrics (TTFT, TPS, goodput), calibrated via AIPerf.
 
 ```text
-Simulation Layer (Rust DES)  →  Benchmark Layer (traces, AIPerf, OpenAI shim)  →  Analytics Layer (dashboard, twin, CI)
+Simulation Layer (Rust DES + inference model)
+        → Benchmark Layer (serving traces, AIPerf adapter, OpenAI shim)
+        → Analytics Layer (dashboard, twin store API, CI golden)
 ```
 
-**Roadmap:** [docs/benchmark_platform.md](benchmark_platform.md) — phased plan P0–P10, UI/tests per phase, multi-model review synthesis.
+| Layer | Responsibility | Status |
+|-------|----------------|--------|
+| **Simulation** | DES, schedulers, cluster, MIG, topology, RL, inference model | M1–M8 + P1 done |
+| **Benchmark** | Synthetic workloads, serving traces, AIPerf, OpenAI shim | MVP done; see gaps in [benchmark_platform.md](benchmark_platform.md) |
+| **Analytics** | Benchmark/what-if UI, score reports, twin API, CI | MVP done; twin UI and full sim-vs-measured overlay still thin |
 
-| Phase | Focus |
-|-------|-------|
-| P0 | Simulation + web replay hardening |
-| P1 | Inference performance model (gate for TTFT/TPS) |
-| P2–P3 | Synthetic LLM workloads + serving trace I/O |
-| P4–P5 | Scheduler benchmark score + dashboard |
-| P6–P7 | OpenAI shim + AIPerf calibration |
-| P8–P10 | What-if, digital twin, CI regression gates |
+**Roadmap / gaps:** [docs/benchmark_platform.md](benchmark_platform.md) · **QA:** [manual_test_benchmark_platform.md](manual_test_benchmark_platform.md)
+
+## Deploy
+
+Docker images and Kubernetes manifests live under `deploy/`. See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md) (`./deploy/build-images.sh`, `kubectl apply -k deploy/kubernetes`).
 
 ## Design invariants
 
@@ -115,4 +120,4 @@ Simulation Layer (Rust DES)  →  Benchmark Layer (traces, AIPerf, OpenAI shim) 
 | M6 | Quotas, priority, preemption, gang spread + timeout, `ForgeScheduler`, `BestFitScheduler` |
 | M7 | Stepped RL session + Gymnasium env + PPO baseline |
 | M8 | Jobs timeline export + Gantt/heatmap viz |
-| **P0–P10** | **Benchmark platform** — inference model, AIPerf, twin, CI ([benchmark_platform.md](benchmark_platform.md)) |
+| **P0–P10** | **Benchmark platform MVP** — inference model, AIPerf, shim, twin API, CI ([benchmark_platform.md](benchmark_platform.md)) |

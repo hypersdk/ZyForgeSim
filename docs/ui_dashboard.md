@@ -75,10 +75,12 @@ All scripts live in [`scripts/`](../scripts/). Shared logic is in [`scripts/comm
 |--------|---------|
 | [`setup_dev.sh`](../scripts/setup_dev.sh) | Create `.venv`, build Rust extension, install Python deps |
 | [`run_live_dashboard.sh`](../scripts/run_live_dashboard.sh) | Rich terminal live dashboard |
-| [`run_web_dashboard.sh`](../scripts/run_web_dashboard.sh) | Start FastAPI + Next.js together |
+| [`run_web_dashboard.sh`](../scripts/run_web_dashboard.sh) | Start FastAPI + Next.js together (API on `127.0.0.1`) |
 | [`stop_web_dashboard.sh`](../scripts/stop_web_dashboard.sh) | Stop FastAPI + Next.js servers |
-| [`run_web_api.sh`](../scripts/run_web_api.sh) | FastAPI backend only (port 8080) |
+| [`run_web_api.sh`](../scripts/run_web_api.sh) | FastAPI backend only (port 8080; default `HOST=0.0.0.0`) |
 | [`run_web_ui.sh`](../scripts/run_web_ui.sh) | Next.js frontend only (port 3000) |
+| [`clean.sh`](../scripts/clean.sh) | Remove build / output / cache artifacts (`--dev` for deeper clean) |
+| [`fix_pyexpat.sh`](../scripts/fix_pyexpat.sh) | macOS Homebrew expat workaround helper |
 
 ---
 
@@ -186,20 +188,33 @@ Default credentials: **Admin** / **Admin@321**. Override with `FORGESIM_DASHBOAR
 - Pick a config from `configs/clusters/*.yaml`
 - **Run simulation** — triggers async run via API
 - Recent runs table with status
-- **Compare two configs** side-by-side (makespan, utilization)
+- **Compare two configs** side-by-side (makespan, utilization, inference columns when present)
 
-### Run detail page (`/runs/:id`)
+### Benchmark (`/benchmark`)
 
-| Panel | Description |
-|-------|-------------|
-| Cluster summary | Nodes, GPUs, running, queue counts |
-| Replay controls | Play / pause / prev / next / speed (0.5×–10×) |
-| Cluster view | Per-node GPU grid (idle / busy coloring) |
-| MIG layout | Placeholder slice grid per GPU |
-| Topology | React Flow NVLink/PCIe graph |
-| Gantt | Wait (orange), run (teal), failed (red dashed) bars |
-| Queue / jobs table | Priority, tenant, GPUs, state |
-| Metrics | Makespan, utilization, charts |
+- Scheduler / model selectors and benchmark run controls
+- TTFT / TPS / utilization / goodput panels from `SchedulerBenchmarkReport`
+- Backed by `GET/POST /api/benchmark/*`
+
+### What-if (`/what-if`)
+
+- Cluster × scheduler scenario sweeps via `POST /api/what-if`
+- Table compare (Pareto chart not shipped yet)
+
+### Run detail page (`/runs/:id`) — **not shipped**
+
+The home page may link to `/runs/{id}`, but there is **no** `web/src/app/runs/` route yet. Use API artifacts instead:
+
+| Artifact | Description |
+|----------|-------------|
+| `outputs/runs/{uuid}/metrics.json` | Aggregate metrics |
+| `timeline.json` | Jobs timeline (Gantt source) |
+| `decisions.json` | Scheduler decision log |
+| `snapshots.json` | Stepped cluster snapshots |
+| `metadata.json` | Config hash / run metadata |
+| `benchmark.json` | Score vector when produced |
+
+Components such as `GanttChart`, `TopologyView`, and `ReplayControls` exist under `web/src/components/` for a future run-detail page.
 
 ---
 
@@ -214,12 +229,19 @@ Default credentials: **Admin** / **Admin@321**. Override with `FORGESIM_DASHBOAR
 | `GET` | `/api/health` | Liveness check |
 | `GET` | `/api/configs` | List `configs/clusters/*.yaml` |
 | `GET` | `/api/runs` | List recent runs |
-| `POST` | `/api/runs` | Start run — body: `{ "config": "small_h100.yaml" }` |
+| `POST` | `/api/runs` | Start run — body: `{ "config": "small_h100.yaml", "scheduler": "preemptive" }` (`scheduler` optional) |
 | `GET` | `/api/runs/:id` | Run status + metrics summary |
 | `GET` | `/api/runs/:id/timeline` | Jobs timeline JSON |
 | `GET` | `/api/runs/:id/events` | Scheduler decision log (replay) |
 | `GET` | `/api/runs/:id/snapshots` | Stepped cluster snapshots |
+| `GET` | `/api/runs/:id/serving-trace` | Export `serving.trace.v1` for the run |
 | `POST` | `/api/compare` | Compare configs — body: `{ "configs": ["a.yaml", "b.yaml"] }` |
+| `GET` | `/api/benchmark/presets` | Benchmark workload/config presets |
+| `GET` | `/api/benchmark/reports` | List benchmark reports |
+| `POST` | `/api/benchmark/run` | Run benchmark scenario |
+| `POST` | `/api/what-if` | Cluster × scheduler sweep |
+| `GET` | `/api/twins` | Digital twin store entries |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible shim ([openai_shim.md](openai_shim.md)) |
 
 ### WebSocket
 
@@ -236,6 +258,9 @@ outputs/runs/{uuid}/
   metrics.json
   timeline.json
   decisions.json
+  snapshots.json
+  metadata.json
+  benchmark.json      # when a benchmark report is produced
 ```
 
 ### Manual API start
@@ -310,7 +335,11 @@ curl http://127.0.0.1:8080/api/configs
 
 After `./scripts/run_web_dashboard.sh`:
 
-Open http://localhost:3000, select `small_h100.yaml`, click **Run simulation**.
+Open http://localhost:3000, select `small_h100.yaml`, click **Run simulation**. Also try `/benchmark` and `/what-if`.
+
+### Kubernetes deploy
+
+See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md) for Docker image build and cluster install.
 
 ---
 
