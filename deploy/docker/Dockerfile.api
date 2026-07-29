@@ -1,0 +1,54 @@
+# ForgeSim API — FastAPI + Rust PyO3 extension
+#
+# Build:
+#   docker build -f deploy/docker/Dockerfile.api -t forgesim-api:0.1.0 .
+#
+# Run:
+#   docker run --rm -p 8080:8080 forgesim-api:0.1.0
+
+FROM rust:1-bookworm AS builder
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY .cargo .cargo
+COPY crates crates
+COPY pyproject.toml LICENSE NOTICE ./
+COPY python python
+
+RUN pip3 install --no-cache-dir "maturin>=1.7,<2.0" \
+  && maturin build --release --out /wheels
+
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd --create-home --shell /usr/sbin/nologin forgesim
+
+COPY configs configs
+COPY python python
+COPY pyproject.toml LICENSE NOTICE ./
+COPY --from=builder /wheels /wheels
+
+RUN pip install --no-cache-dir /wheels/forgesim-*.whl ".[server]" \
+  && rm -rf /wheels \
+  && mkdir -p outputs/runs \
+  && chown -R forgesim:forgesim /app
+
+ENV PYTHONPATH=/app/python
+ENV PYTHONUNBUFFERED=1
+
+USER forgesim
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health')"
+
+CMD ["uvicorn", "forgesim.server.app:app", "--host", "0.0.0.0", "--port", "8080"]

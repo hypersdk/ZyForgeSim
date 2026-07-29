@@ -2,6 +2,7 @@
 const apiBase = process.env.FORGESIM_API_URL || "http://127.0.0.1:8080";
 
 const nextConfig = {
+  output: "standalone",
   async rewrites() {
     // Proxy ForgeSim backend routes. Next.js handlers under /api/auth/* take
     // precedence over these afterFiles rewrites.

@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: forgesim
+  namespace: forgesim
+  labels:
+    app.kubernetes.io/name: forgesim
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: forgesim.example.com
+      http:
+        paths:
+          # Next.js login handlers must stay on the web pod.
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: forgesim-web
+                port:
+                  number: 3000
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: forgesim-api
+                port:
+                  number: 8080
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: forgesim-api
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: forgesim-web
+                port:
+                  number: 3000

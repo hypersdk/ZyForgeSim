@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: forgesim
+
+resources:
+  - namespace.yaml
+  - api.yaml
+  - web.yaml
+  - ingress.yaml
+
+images:
+  - name: forgesim-api
+    newName: forgesim-api
+    newTag: "0.1.0"
+  - name: forgesim-web
+    newName: forgesim-web
+    newTag: "0.1.0"
