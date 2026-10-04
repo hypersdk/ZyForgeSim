@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/zyvorai/janus?sort=semver)](https://github.com/zyvorai/janus/releases)
 [![License: Apache-2.0](https://img.shields.io/github/license/zyvorai/janus)](LICENSE)
 
-![Janus — GPU scheduling R&D with zero GPUs](docs/social/janus-share-card.png)
+![Janus — GPU scheduling R&D with zero GPUs](docs/social/janus-hero-dark.jpg)
 
 **A discrete-event simulator for Kubernetes-native GPU scheduling.**
 
